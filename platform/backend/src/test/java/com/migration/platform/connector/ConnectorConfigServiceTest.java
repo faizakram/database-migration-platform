@@ -3,10 +3,17 @@ package com.migration.platform.connector;
 import com.migration.platform.config.PlatformProperties;
 import com.migration.platform.connection.DbConnection;
 import com.migration.platform.connection.DbType;
+import com.migration.platform.connector.source.Db2SourceStrategy;
+import com.migration.platform.connector.source.MySqlSourceStrategy;
+import com.migration.platform.connector.source.OracleSourceStrategy;
+import com.migration.platform.connector.source.PostgresSourceStrategy;
+import com.migration.platform.connector.source.SourceConnectorStrategy;
+import com.migration.platform.connector.source.SqlServerSourceStrategy;
 import com.migration.platform.project.MigrationProject;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -21,8 +28,16 @@ class ConnectorConfigServiceTest {
                 new PlatformProperties.Reconciliation("0 0 0 * * *"));
     }
 
-    private final ConnectorConfigService svc = new ConnectorConfigService(
-            platformProps(), new ConnectorSecretProperties("inline", null, null));
+    private static List<SourceConnectorStrategy> strategies() {
+        return List.of(new SqlServerSourceStrategy(), new MySqlSourceStrategy(),
+                new PostgresSourceStrategy(), new OracleSourceStrategy(), new Db2SourceStrategy());
+    }
+
+    private static ConnectorConfigService svc(ConnectorSecretProperties secrets) {
+        return new ConnectorConfigService(platformProps(), secrets, strategies());
+    }
+
+    private final ConnectorConfigService svc = svc(new ConnectorSecretProperties("inline", null, null));
 
     private MigrationProject project(Map<String, Object> config) {
         MigrationProject p = new MigrationProject();
@@ -45,6 +60,56 @@ class ConnectorConfigServiceTest {
         return c;
     }
 
+    private DbConnection conn(DbType type, String host, int port, String db, String user) {
+        DbConnection c = new DbConnection();
+        c.setDbType(type);
+        c.setHost(host); c.setPort(port); c.setDatabaseName(db); c.setUsername(user);
+        return c;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void mysqlSourceUsesBinlogConnectorAndServerId() {
+        MigrationProject p = project(new HashMap<>());
+        Map<String, Object> cfg = (Map<String, Object>) svc.sourceConnector(
+                p, conn(DbType.MYSQL, "mysql", 3306, "shop", "repl"), "pw").get("config");
+        assertThat(cfg).containsEntry("connector.class", "io.debezium.connector.mysql.MySqlConnector");
+        assertThat(cfg).containsEntry("database.include.list", "shop");
+        assertThat(cfg).containsKey("database.server.id");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void postgresSourceUsesLogicalDecodingSlot() {
+        MigrationProject p = project(new HashMap<>());
+        Map<String, Object> cfg = (Map<String, Object>) svc.sourceConnector(
+                p, conn(DbType.POSTGRESQL, "pg", 5432, "shop", "repl"), "pw").get("config");
+        assertThat(cfg).containsEntry("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
+        assertThat(cfg).containsEntry("plugin.name", "pgoutput");
+        assertThat(cfg).containsKey("slot.name");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void sinkUrlMatchesTargetDialect_homogeneousMysql() {
+        // Homogeneous MySQL -> MySQL: sink URL is MySQL and routing stays generic.
+        MigrationProject p = project(new HashMap<>());
+        Map<String, Object> sink = (Map<String, Object>) svc.sinkConnector(
+                p, conn(DbType.MYSQL, "mysqltgt", 3306, "warehouse", "app"), "pw", "shop").get("config");
+        assertThat(sink.get("connection.url").toString()).startsWith("jdbc:mysql://mysqltgt:3306/warehouse");
+        // MySQL has no separate schema → table.name.format is unqualified.
+        assertThat(sink).containsEntry("table.name.format", "${topic}");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void sinkUrlMatchesTargetDialect_oracle() {
+        MigrationProject p = project(new HashMap<>());
+        Map<String, Object> sink = (Map<String, Object>) svc.sinkConnector(
+                p, conn(DbType.ORACLE, "ora", 1521, "ORCLPDB1", "app"), "pw", "shop").get("config");
+        assertThat(sink.get("connection.url").toString()).isEqualTo("jdbc:oracle:thin:@ora:1521/ORCLPDB1");
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void inlineModePutsPlaintextPasswordIntoConfig() {
@@ -59,8 +124,7 @@ class ConnectorConfigServiceTest {
     @SuppressWarnings("unchecked")
     void fileModeEmitsProviderReferenceNotPlaintext() {
         // #43: externalized secrets — the plaintext must NOT appear; a provider reference does.
-        ConnectorConfigService externalized = new ConnectorConfigService(
-                platformProps(), new ConnectorSecretProperties("file", "/opt/connect-secrets", null));
+        ConnectorConfigService externalized = svc(new ConnectorSecretProperties("file", "/opt/connect-secrets", null));
         MigrationProject p = project(new HashMap<>());
         Map<String, Object> src = (Map<String, Object>) externalized.sourceConnector(p, src(), "s3cr3t").get("config");
         Map<String, Object> sink = (Map<String, Object>) externalized.sinkConnector(p, tgt(), "s3cr3t", "Employees").get("config");
@@ -109,13 +173,16 @@ class ConnectorConfigServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void sinkTopicsRegexMatchesSourcePrefixAndDatabase() {
+    void sinkRoutingIsEngineAgnostic() {
         Map<String, Object> cfg = new HashMap<>();
         cfg.put("topicPrefix", "mssql");
         MigrationProject p = project(cfg);
 
         Map<String, Object> sink = (Map<String, Object>) svc.sinkConnector(p, tgt(), "pw", "Employees").get("config");
-        assertThat(sink).containsEntry("topics.regex", "mssql\\.Employees\\.dbo\\.(.*)");
+        // Generic routing: consume everything under the prefix, strip all namespace segments to the table.
+        assertThat(sink).containsEntry("topics.regex", "mssql\\..*");
+        assertThat(sink).containsEntry("transforms.route.regex", "mssql\\.(?:[^.]+\\.)+([^.]+)");
+        assertThat(sink).containsEntry("transforms.route.replacement", "$1");
         assertThat(sink.get("transforms").toString()).contains("snakeCaseKey", "snakeCaseValue", "typeConversion");
     }
 

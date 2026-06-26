@@ -4,7 +4,7 @@ import type {
   Connection, ConnectionRequest, TestResult,
   Project, ProjectRequest, Job, JobTableStatus, TableInfo, ColumnInfo, ColumnMapping, ProjectHealth,
   ReconciliationRun, LoginResponse, MeResponse, UserAdmin, RoleName, AlertItem, ConstraintApplyResult,
-  Schedule, ScheduleRequest, OrchestratorStatus, AuditPage,
+  Schedule, ScheduleRequest, OrchestratorStatus, AuditPage, EngineSpec, CdcReadiness,
 } from './types';
 
 const http = axios.create({ baseURL: '/api/v1' });
@@ -38,6 +38,8 @@ export const authApi = {
 
 export const connectionsApi = {
   list: () => http.get<Connection[]>('/connections').then((r) => r.data),
+  engines: () => http.get<EngineSpec[]>('/connections/engines').then((r) => r.data),
+  cdcReadiness: (id: string) => http.get<CdcReadiness>(`/connections/${id}/cdc-readiness`).then((r) => r.data),
   create: (body: ConnectionRequest) =>
     http.post<Connection>('/connections', body).then((r) => r.data),
   update: (id: string, body: ConnectionRequest) =>

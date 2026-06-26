@@ -2,69 +2,51 @@ package com.migration.platform.connector;
 
 import com.migration.platform.config.PlatformProperties;
 import com.migration.platform.connection.DbConnection;
+import com.migration.platform.connection.DbType;
+import com.migration.platform.connector.source.SourceConnectorStrategy;
+import com.migration.platform.connector.source.SourceContext;
 import com.migration.platform.project.MigrationProject;
 import org.springframework.stereotype.Service;
 
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Generates Debezium source (SQL Server) and JDBC sink (PostgreSQL) connector configs from a
- * project + its connections. Centralizes the logic that used to live in hand-edited JSON files,
- * and makes delete semantics consistent per {@link DeleteStrategy} (issue #25).
+ * Generates Debezium source + JDBC sink connector configs for a project (#25), now engine-agnostic
+ * (#76): the source is built by a per-engine {@link SourceConnectorStrategy}, and the sink targets
+ * any supported dialect. Topic routing is generic, so the sink works regardless of how many
+ * namespace segments the source engine emits.
  */
 @Service
 public class ConnectorConfigService {
 
     private final PlatformProperties props;
     private final ConnectorSecretProperties secrets;
+    private final Map<DbType, SourceConnectorStrategy> sources = new EnumMap<>(DbType.class);
 
-    public ConnectorConfigService(PlatformProperties props, ConnectorSecretProperties secrets) {
+    public ConnectorConfigService(PlatformProperties props, ConnectorSecretProperties secrets,
+                                  List<SourceConnectorStrategy> strategies) {
         this.props = props;
         this.secrets = secrets;
+        for (SourceConnectorStrategy s : strategies) this.sources.put(s.engine(), s);
     }
 
-    public String sourceName(MigrationProject p) {
-        return MigrationConfig.sanitize(p.getName()) + "-source";
-    }
+    public String sourceName(MigrationProject p) { return MigrationConfig.sanitize(p.getName()) + "-source"; }
+    public String sinkName(MigrationProject p) { return MigrationConfig.sanitize(p.getName()) + "-sink"; }
 
-    public String sinkName(MigrationProject p) {
-        return MigrationConfig.sanitize(p.getName()) + "-sink";
-    }
-
-    /** Full payload accepted by {@code POST /connectors}. */
     public Map<String, Object> sourceConnector(MigrationProject p, DbConnection src, String srcPassword) {
         MigrationConfig mc = MigrationConfig.from(p.getConfig(), p.getName());
         boolean hard = mc.deleteStrategy() == DeleteStrategy.HARD;
 
-        Map<String, Object> cfg = new LinkedHashMap<>();
-        cfg.put("connector.class", "io.debezium.connector.sqlserver.SqlServerConnector");
-        cfg.put("tasks.max", String.valueOf(mc.tasksMax()));
-        cfg.put("database.hostname", src.getHost());
-        cfg.put("database.port", String.valueOf(src.getPort()));
-        cfg.put("database.user", src.getUsername());
-        cfg.put("database.password", secrets.passwordValue("source", srcPassword));
-        cfg.put("database.names", src.getDatabaseName());
-        // TLS driven by the connection (#44): secure by default; opt out only for dev.
-        boolean encrypt = optBool(src.getOptions(), "encrypt", true);
-        cfg.put("database.encrypt", String.valueOf(encrypt));
-        if (optBool(src.getOptions(), "trustServerCertificate", false)) {
-            cfg.put("database.trustServerCertificate", "true");
+        SourceConnectorStrategy strategy = sources.get(src.getDbType());
+        if (strategy == null) {
+            throw new IllegalArgumentException("No source connector support for engine " + src.getDbType());
         }
-        cfg.put("topic.prefix", mc.topicPrefix());
-        cfg.put("table.include.list", mc.tableIncludeList());
-        cfg.put("schema.history.internal.kafka.bootstrap.servers", props.connect().kafkaBootstrap());
-        cfg.put("schema.history.internal.kafka.topic", "schema-changes." + mc.topicPrefix());
-        cfg.put("snapshot.mode", mc.snapshotMode());
-        cfg.put("snapshot.isolation.mode", "read_committed");
-        // Large-table snapshot tuning (#27): parallel workers + fetch size.
-        cfg.put("snapshot.max.threads", String.valueOf(mc.snapshotMaxThreads()));
-        cfg.put("snapshot.fetch.size", String.valueOf(mc.snapshotFetchSize()));
-        cfg.put("decimal.handling.mode", "precise");
-        cfg.put("time.precision.mode", "adaptive_time_microseconds");
-        cfg.put("tombstones.on.delete", String.valueOf(hard));
-
-        return payload(sourceName(p), cfg);
+        SourceContext ctx = new SourceContext(src, mc, secrets.passwordValue("source", srcPassword),
+                props.connect().kafkaBootstrap(), hard);
+        return payload(sourceName(p), strategy.buildConfig(ctx));
     }
 
     public Map<String, Object> sinkConnector(MigrationProject p, DbConnection tgt, String tgtPassword,
@@ -72,27 +54,25 @@ public class ConnectorConfigService {
         MigrationConfig mc = MigrationConfig.from(p.getConfig(), p.getName());
         boolean hard = mc.deleteStrategy() == DeleteStrategy.HARD;
         String prefix = mc.topicPrefix();
-
-        Object sslmode = tgt.getOptions() == null ? null : tgt.getOptions().get("sslmode");
-        String sslParam = (sslmode != null && !sslmode.toString().isBlank())
-                ? "&sslmode=" + sslmode : "";
+        boolean schemaQualified = tgt.getDbType() != DbType.MYSQL;   // MySQL has no separate schema
 
         Map<String, Object> cfg = new LinkedHashMap<>();
         cfg.put("connector.class", "io.debezium.connector.jdbc.JdbcSinkConnector");
         cfg.put("tasks.max", String.valueOf(mc.tasksMax()));
-        cfg.put("connection.url", "jdbc:postgresql://" + tgt.getHost() + ":" + tgt.getPort()
-                + "/" + tgt.getDatabaseName() + "?currentSchema=" + mc.targetSchema() + sslParam);
+        cfg.put("connection.url", targetJdbcUrl(tgt, mc.targetSchema()));
         cfg.put("connection.username", tgt.getUsername());
         cfg.put("connection.password", secrets.passwordValue("sink", tgtPassword));
 
-        // <prefix>.<sourceDb>.dbo.<table>  ->  <table>
-        String topicsRegex = prefix + "\\." + sourceDbName + "\\.dbo\\.(.*)";
+        // Generic routing (#76): consume everything under the prefix and strip all namespace
+        // segments down to the final table name — works for any source engine's topic depth
+        // (sqlserver: prefix.db.schema.table, mysql: prefix.db.table, postgres: prefix.schema.table).
+        String topicsRegex = prefix + "\\..*";
+        String routeRegex = prefix + "\\.(?:[^.]+\\.)+([^.]+)";
         cfg.put("topics.regex", topicsRegex);
 
-        // Transform chain. Soft delete adds the rewrite + rename + cast; hard delete skips them.
         StringBuilder transforms = new StringBuilder("route,unwrap");
         cfg.put("transforms.route.type", "org.apache.kafka.connect.transforms.RegexRouter");
-        cfg.put("transforms.route.regex", topicsRegex);
+        cfg.put("transforms.route.regex", routeRegex);
         cfg.put("transforms.route.replacement", "$1");
         cfg.put("transforms.unwrap.type", "io.debezium.transforms.ExtractNewRecordState");
 
@@ -119,9 +99,9 @@ public class ConnectorConfigService {
         }
         cfg.put("transforms", transforms.toString());
 
-        cfg.put("table.name.format", mc.targetSchema() + ".${topic}");
+        cfg.put("table.name.format", schemaQualified ? mc.targetSchema() + ".${topic}" : "${topic}");
         cfg.put("insert.mode", "upsert");
-        cfg.put("delete.enabled", String.valueOf(hard));     // consistent with the source tombstone setting
+        cfg.put("delete.enabled", String.valueOf(hard));
         cfg.put("primary.key.mode", "record_key");
         cfg.put("schema.evolution", mc.schemaEvolution());
         cfg.put("quote.identifiers", "false");
@@ -129,17 +109,27 @@ public class ConnectorConfigService {
         return payload(sinkName(p), cfg);
     }
 
+    /** Build the sink JDBC URL for the target dialect (#79). */
+    private String targetJdbcUrl(DbConnection tgt, String targetSchema) {
+        String host = tgt.getHost();
+        int port = tgt.getPort();
+        String db = tgt.getDatabaseName();
+        Object sslmode = tgt.getOptions() == null ? null : tgt.getOptions().get("sslmode");
+        String sslParam = (sslmode != null && !sslmode.toString().isBlank()) ? "&sslmode=" + sslmode : "";
+        return switch (tgt.getDbType()) {
+            case POSTGRESQL -> "jdbc:postgresql://" + host + ":" + port + "/" + db
+                    + "?currentSchema=" + targetSchema + sslParam;
+            case MYSQL -> "jdbc:mysql://" + host + ":" + port + "/" + db;
+            case SQLSERVER -> "jdbc:sqlserver://" + host + ":" + port + ";databaseName=" + db;
+            case ORACLE -> "jdbc:oracle:thin:@" + host + ":" + port + "/" + db;
+            case DB2 -> "jdbc:db2://" + host + ":" + port + "/" + db;
+        };
+    }
+
     private Map<String, Object> payload(String name, Map<String, Object> cfg) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("name", name);
         out.put("config", cfg);
         return out;
-    }
-
-    private boolean optBool(Map<String, Object> options, String key, boolean def) {
-        if (options == null) return def;
-        Object v = options.get(key);
-        if (v instanceof Boolean b) return b;
-        return v == null ? def : Boolean.parseBoolean(v.toString());
     }
 }
