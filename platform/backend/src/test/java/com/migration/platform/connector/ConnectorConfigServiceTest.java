@@ -134,6 +134,39 @@ class ConnectorConfigServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void preserveIsDefaultAndOmitsRenameSmtAndQuotesIdentifiers() {
+        // #84: default must NOT rename, and must quote identifiers so source case survives.
+        MigrationProject p = project(new HashMap<>());
+        Map<String, Object> sink = (Map<String, Object>) svc.sinkConnector(p, tgt(), "pw", "Employees").get("config");
+        assertThat(sink.get("transforms").toString()).doesNotContain("caseKey", "caseValue", "snakeCase");
+        assertThat(sink).containsEntry("quote.identifiers", "true");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void snakeCaseStrategyAddsCaseSmtAndUnquotedIdentifiers() {
+        Map<String, Object> cfg = new HashMap<>();
+        cfg.put("namingStrategy", "snake_case");
+        MigrationProject p = project(cfg);
+        Map<String, Object> sink = (Map<String, Object>) svc.sinkConnector(p, tgt(), "pw", "Employees").get("config");
+        assertThat(sink.get("transforms").toString()).contains("caseKey", "caseValue");
+        assertThat(sink).containsEntry("transforms.caseValue.strategy", "snake_case");
+        assertThat(sink).containsEntry("quote.identifiers", "false");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void upperCaseStrategyPassesStrategyToSmtAndQuotes() {
+        Map<String, Object> cfg = new HashMap<>();
+        cfg.put("namingStrategy", "UPPER_CASE");
+        MigrationProject p = project(cfg);
+        Map<String, Object> sink = (Map<String, Object>) svc.sinkConnector(p, tgt(), "pw", "Employees").get("config");
+        assertThat(sink).containsEntry("transforms.caseKey.strategy", "upper_case");
+        assertThat(sink).containsEntry("quote.identifiers", "true");
+    }
+
+    @Test
     void connectorNamesAreSanitisedFromProjectName() {
         MigrationProject p = project(new HashMap<>());
         assertThat(svc.sourceName(p)).isEqualTo("employees-migration-source");
@@ -183,7 +216,8 @@ class ConnectorConfigServiceTest {
         assertThat(sink).containsEntry("topics.regex", "mssql\\..*");
         assertThat(sink).containsEntry("transforms.route.regex", "mssql\\.(?:[^.]+\\.)+([^.]+)");
         assertThat(sink).containsEntry("transforms.route.replacement", "$1");
-        assertThat(sink.get("transforms").toString()).contains("snakeCaseKey", "snakeCaseValue", "typeConversion");
+        // typeConversion is always present; naming SMTs are added only for non-preserve strategies (#84).
+        assertThat(sink.get("transforms").toString()).contains("route", "unwrap", "typeConversion");
     }
 
     @Test

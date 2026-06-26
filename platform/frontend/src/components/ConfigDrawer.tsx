@@ -1,4 +1,4 @@
-import { Drawer, Form, Input, InputNumber, Select, Space, Button, App } from 'antd';
+import { Drawer, Form, Input, InputNumber, Select, Space, Button, App, Typography } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import { useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -8,12 +8,25 @@ import type { Project } from '../api/types';
 const asCsv = (v: unknown) =>
   Array.isArray(v) ? (v as string[]).join(',') : (typeof v === 'string' ? v : '');
 
+// Client-side preview of how a sample identifier renders under each naming strategy (#84/#87).
+function previewName(strategy: string): string {
+  const words = ['First', 'Name'];
+  switch (strategy) {
+    case 'snake_case': return 'first_name';
+    case 'camelCase': return 'firstName';
+    case 'PascalCase': return 'FirstName';
+    case 'UPPER_CASE': return 'FIRST_NAME';
+    default: return words.join(''); // preserve → exactly as in the source (e.g. FirstName)
+  }
+}
+
 /** Edit a project's migration/CDC configuration after creation (issue #38). */
 export default function ConfigDrawer({ project, onClose }: { project: Project | null; onClose: () => void }) {
   const { message } = App.useApp();
   const qc = useQueryClient();
   const open = project !== null;
   const [form] = Form.useForm();
+  const namingStrategy = (Form.useWatch('namingStrategy', form) as string) ?? 'preserve';
 
   useEffect(() => {
     if (!project) return;
@@ -29,6 +42,7 @@ export default function ConfigDrawer({ project, onClose }: { project: Project | 
       schemaEvolution: (c.schemaEvolution as string) ?? 'basic',
       snapshotMaxThreads: (c.snapshotMaxThreads as number) ?? 1,
       snapshotFetchSize: (c.snapshotFetchSize as number) ?? 2000,
+      namingStrategy: (c.namingStrategy as string) ?? 'preserve',
     });
   }, [project, form]);
 
@@ -52,6 +66,7 @@ export default function ConfigDrawer({ project, onClose }: { project: Project | 
           schemaEvolution: v.schemaEvolution,
           snapshotMaxThreads: v.snapshotMaxThreads,
           snapshotFetchSize: v.snapshotFetchSize,
+          namingStrategy: v.namingStrategy,
         },
       });
     },
@@ -99,6 +114,17 @@ export default function ConfigDrawer({ project, onClose }: { project: Project | 
         <Form.Item name="tableIncludeList" label="Table include list"
           tooltip="Debezium regex, e.g. dbo.* or dbo.Employee,dbo.Orders">
           <Input placeholder="dbo.*" />
+        </Form.Item>
+        <Form.Item name="namingStrategy" label="Naming strategy"
+          tooltip="How table/column names land on the target (#84). 'preserve' keeps source names exactly."
+          extra={<Typography.Text type="secondary">Preview: <code>FirstName</code> → <code>{previewName(namingStrategy)}</code></Typography.Text>}>
+          <Select options={[
+            { value: 'preserve', label: 'Preserve original names (default)' },
+            { value: 'snake_case', label: 'snake_case' },
+            { value: 'camelCase', label: 'camelCase' },
+            { value: 'PascalCase', label: 'PascalCase' },
+            { value: 'UPPER_CASE', label: 'UPPER_CASE' },
+          ]} />
         </Form.Item>
         <Space.Compact block>
           <Form.Item name="uuidColumns" label="UUID columns" style={{ width: '50%' }}>

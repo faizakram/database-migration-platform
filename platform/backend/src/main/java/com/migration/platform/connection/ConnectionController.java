@@ -17,10 +17,13 @@ public class ConnectionController {
 
     private final ConnectionService service;
     private final CdcReadinessService readiness;
+    private final SchemaObjectService schemaObjects;
 
-    public ConnectionController(ConnectionService service, CdcReadinessService readiness) {
+    public ConnectionController(ConnectionService service, CdcReadinessService readiness,
+                                SchemaObjectService schemaObjects) {
         this.service = service;
         this.readiness = readiness;
+        this.schemaObjects = schemaObjects;
     }
 
     @GetMapping
@@ -38,6 +41,12 @@ public class ConnectionController {
     @GetMapping("/{id}/cdc-readiness")
     public CdcReadinessService.Readiness cdcReadiness(@PathVariable UUID id) {
         return readiness.check(id);
+    }
+
+    /** Inventory of non-table schema objects: sequences/identity/views/procedures/functions (#92). */
+    @GetMapping("/{id}/schema-objects")
+    public SchemaObjectService.Inventory schemaObjects(@PathVariable UUID id) {
+        return schemaObjects.inventory(id);
     }
 
     @GetMapping("/{id}")

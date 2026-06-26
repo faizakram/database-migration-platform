@@ -5,6 +5,7 @@ import type {
   Project, ProjectRequest, Job, JobTableStatus, TableInfo, ColumnInfo, ColumnMapping, ProjectHealth,
   ReconciliationRun, LoginResponse, MeResponse, UserAdmin, RoleName, AlertItem, ConstraintApplyResult,
   Schedule, ScheduleRequest, OrchestratorStatus, AuditPage, EngineSpec, CdcReadiness,
+  MigrationPlan, SchemaObjectInventory,
 } from './types';
 
 const http = axios.create({ baseURL: '/api/v1' });
@@ -40,6 +41,7 @@ export const connectionsApi = {
   list: () => http.get<Connection[]>('/connections').then((r) => r.data),
   engines: () => http.get<EngineSpec[]>('/connections/engines').then((r) => r.data),
   cdcReadiness: (id: string) => http.get<CdcReadiness>(`/connections/${id}/cdc-readiness`).then((r) => r.data),
+  schemaObjects: (id: string) => http.get<SchemaObjectInventory>(`/connections/${id}/schema-objects`).then((r) => r.data),
   create: (body: ConnectionRequest) =>
     http.post<Connection>('/connections', body).then((r) => r.data),
   update: (id: string, body: ConnectionRequest) =>
@@ -107,6 +109,7 @@ export const projectsApi = {
   update: (id: string, body: ProjectRequest) =>
     http.put<Project>(`/projects/${id}`, body).then((r) => r.data),
   remove: (id: string) => http.delete(`/projects/${id}`).then(() => undefined),
+  plan: (id: string) => http.get<MigrationPlan>(`/projects/${id}/plan`).then((r) => r.data),
 };
 
 export const jobsApi = {

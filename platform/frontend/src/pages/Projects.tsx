@@ -16,8 +16,10 @@ import ValidationDrawer from '../components/ValidationDrawer';
 import ConfigDrawer from '../components/ConfigDrawer';
 import ErrorsDrawer from '../components/ErrorsDrawer';
 import SchedulesDrawer from '../components/SchedulesDrawer';
+import PlanDrawer from '../components/PlanDrawer';
+import SchemaObjectsDrawer from '../components/SchemaObjectsDrawer';
 import EmptyState from '../components/EmptyState';
-import { ProjectOutlined } from '@ant-design/icons';
+import { ProjectOutlined, PartitionOutlined, ApartmentOutlined } from '@ant-design/icons';
 import { useAuth } from '../auth/AuthContext';
 
 const STATUS_COLOR: Record<ProjectStatus, string> = {
@@ -51,6 +53,8 @@ export default function Projects() {
   const [configFor, setConfigFor] = useState<Project | null>(null);
   const [errorsFor, setErrorsFor] = useState<Project | null>(null);
   const [schedulesFor, setSchedulesFor] = useState<Project | null>(null);
+  const [planFor, setPlanFor] = useState<Project | null>(null);
+  const [objectsFor, setObjectsFor] = useState<Project | null>(null);
   const [form] = Form.useForm<FormValues>();
 
   const { data, isLoading } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list });
@@ -122,6 +126,10 @@ export default function Projects() {
           <Button size="small" icon={<CheckCircleOutlined />}
             disabled={!canWrite || !row.sourceConnectionId || !row.targetConnectionId}
             onClick={() => setValidateFor(row)}>Validate</Button>
+          <Button size="small" icon={<PartitionOutlined />}
+            onClick={() => setPlanFor(row)}>Plan</Button>
+          <Button size="small" icon={<ApartmentOutlined />}
+            onClick={() => setObjectsFor(row)}>Objects</Button>
           <Button size="small" icon={<ClockCircleOutlined />}
             onClick={() => setSchedulesFor(row)}>Schedules</Button>
           <Button size="small" type="primary" ghost icon={<ThunderboltOutlined />}
@@ -242,6 +250,8 @@ export default function Projects() {
       <ConfigDrawer project={configFor} onClose={() => setConfigFor(null)} />
       <ErrorsDrawer project={errorsFor} onClose={() => setErrorsFor(null)} />
       <SchedulesDrawer project={schedulesFor} onClose={() => setSchedulesFor(null)} />
+      <PlanDrawer project={planFor} onClose={() => setPlanFor(null)} />
+      <SchemaObjectsDrawer project={objectsFor} onClose={() => setObjectsFor(null)} />
     </Card>
   );
 }
