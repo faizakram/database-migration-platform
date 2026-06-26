@@ -15,18 +15,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.Statement;
+import java.sql.*;
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 /**
- * Per-table source-vs-target row-count reconciliation (issue #47). Soft-delete aware: when the
- * project uses SOFT deletes, rows flagged {@code __cdc_deleted} are excluded from the target count.
- * Counts run synchronously; suitable for moderate table counts (async batching tracked in #49).
+ * Data validation (issues #47, #48). Two modes:
+ *  - COUNT: per-table source-vs-target row-count comparison (soft-delete aware).
+ *  - CHECKSUM: sample primary keys from the source and verify their presence in the target,
+ *    normalising key values to lower-cased text so they compare across the type conversion.
+ *    Catches identity gaps that equal counts can hide. Single-PK tables only; others are SKIPPED.
+ * Field-level content checksums (type/charset-normalised) are a deeper follow-up.
  */
 @Service
 public class ReconciliationService {
@@ -60,7 +59,8 @@ public class ReconciliationService {
     }
 
     @Transactional
-    public RunDto run(UUID projectId) {
+    public RunDto run(UUID projectId, String mode, int sampleSize) {
+        boolean checksum = "CHECKSUM".equalsIgnoreCase(mode);
         MigrationProject project = projects.findById(projectId)
                 .orElseThrow(() -> new NotFoundException("Project " + projectId + " not found"));
         DbConnection src = requireConnection(project.getSourceConnectionId(), "source");
@@ -75,6 +75,7 @@ public class ReconciliationService {
         ReconciliationRun run = new ReconciliationRun();
         run.setProjectId(projectId);
         run.setStatus("RUNNING");
+        run.setMode(checksum ? "CHECKSUM" : "COUNT");
         run.setTotalTables(tables.size());
         run = runRepo.save(run);
 
@@ -87,7 +88,9 @@ public class ReconciliationService {
                 String[] parts = fq.split("\\.", 2);
                 String schema = parts.length == 2 ? parts[0] : "dbo";
                 String tableName = parts.length == 2 ? parts[1] : parts[0];
-                ReconciliationResult r = reconcileOne(sc, tc, schema, tableName, mc.targetSchema(), softDelete);
+                ReconciliationResult r = checksum
+                        ? reconcileChecksum(sc, tc, schema, tableName, mc.targetSchema(), softDelete, sampleSize)
+                        : reconcileCount(sc, tc, schema, tableName, mc.targetSchema(), softDelete);
                 r.setRunId(run.getId());
                 resultRepo.save(r);
                 if ("MISMATCH".equals(r.getStatus())) mismatched++;
@@ -104,15 +107,12 @@ public class ReconciliationService {
         return RunDto.from(run, resultRepo.findByRunIdOrderByTableName(run.getId()));
     }
 
-    private ReconciliationResult reconcileOne(Connection sc, Connection tc, String schema, String table,
-                                              String targetSchema, boolean softDelete) {
-        ReconciliationResult r = new ReconciliationResult();
-        r.setSchemaName(schema);
-        r.setTableName(table);
+    private ReconciliationResult reconcileCount(Connection sc, Connection tc, String schema, String table,
+                                                String targetSchema, boolean softDelete) {
+        ReconciliationResult r = newResult(schema, table);
         try {
             long source = count(sc, "SELECT COUNT(*) FROM [" + schema + "].[" + table + "]");
-            String targetTable = snakeCase(table);
-            String targetSql = "SELECT COUNT(*) FROM " + targetSchema + "." + targetTable
+            String targetSql = "SELECT COUNT(*) FROM " + targetSchema + "." + snakeCase(table)
                     + (softDelete ? " WHERE __cdc_deleted IS NOT TRUE" : "");
             long target = count(tc, targetSql);
             r.setSourceCount(source);
@@ -126,10 +126,75 @@ public class ReconciliationService {
         return r;
     }
 
+    private ReconciliationResult reconcileChecksum(Connection sc, Connection tc, String schema, String table,
+                                                   String targetSchema, boolean softDelete, int sampleSize) {
+        ReconciliationResult r = newResult(schema, table);
+        try {
+            Optional<String> pkOpt = singlePrimaryKey(sc, schema, table);
+            if (pkOpt.isEmpty()) {
+                r.setStatus("SKIPPED");
+                r.setError("Checksum sampling requires exactly one primary-key column");
+                return r;
+            }
+            String pk = pkOpt.get();
+
+            // Sample normalised PK values from the source (ordered for determinism).
+            Set<String> sample = new LinkedHashSet<>();
+            String srcSql = "SELECT TOP (" + Math.max(1, sampleSize) + ") [" + pk + "] AS k FROM ["
+                    + schema + "].[" + table + "] ORDER BY [" + pk + "]";
+            try (Statement st = sc.createStatement(); ResultSet rs = st.executeQuery(srcSql)) {
+                while (rs.next()) {
+                    Object v = rs.getObject("k");
+                    if (v != null) sample.add(v.toString().trim().toLowerCase());
+                }
+            }
+
+            // Which of the sampled keys exist in the target (PK cast to lower text to bridge type conversion).
+            Set<String> present = new HashSet<>();
+            if (!sample.isEmpty()) {
+                String tgtPk = snakeCase(pk);
+                String tgtSql = "SELECT lower(cast(" + tgtPk + " AS text)) AS k FROM "
+                        + targetSchema + "." + snakeCase(table)
+                        + " WHERE lower(cast(" + tgtPk + " AS text)) = ANY(?)"
+                        + (softDelete ? " AND __cdc_deleted IS NOT TRUE" : "");
+                try (PreparedStatement ps = tc.prepareStatement(tgtSql)) {
+                    ps.setArray(1, tc.createArrayOf("text", sample.toArray()));
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) present.add(rs.getString("k"));
+                    }
+                }
+            }
+
+            long missing = sample.stream().filter(k -> !present.contains(k)).count();
+            r.setSampled((long) sample.size());
+            r.setMissing(missing);
+            r.setStatus(missing == 0 ? "MATCH" : "MISMATCH");
+        } catch (Exception e) {
+            r.setStatus("ERROR");
+            r.setError(e.getMessage());
+        }
+        return r;
+    }
+
+    private Optional<String> singlePrimaryKey(Connection sc, String schema, String table) throws SQLException {
+        List<String> pks = new ArrayList<>();
+        try (ResultSet rs = sc.getMetaData().getPrimaryKeys(sc.getCatalog(), schema, table)) {
+            while (rs.next()) pks.add(rs.getString("COLUMN_NAME"));
+        }
+        return pks.size() == 1 ? Optional.of(pks.get(0)) : Optional.empty();
+    }
+
     private long count(Connection conn, String sql) throws Exception {
         try (Statement st = conn.createStatement(); ResultSet rs = st.executeQuery(sql)) {
             return rs.next() ? rs.getLong(1) : 0L;
         }
+    }
+
+    private ReconciliationResult newResult(String schema, String table) {
+        ReconciliationResult r = new ReconciliationResult();
+        r.setSchemaName(schema);
+        r.setTableName(table);
+        return r;
     }
 
     @SuppressWarnings("unchecked")
@@ -140,7 +205,7 @@ public class ReconciliationService {
         return List.of();
     }
 
-    /** Mirrors the SnakeCaseTransform SMT so target table names match. */
+    /** Mirrors the SnakeCaseTransform SMT so target table/column names match. */
     private String snakeCase(String input) {
         if (input == null || input.isEmpty()) return input;
         String result = input.replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2");

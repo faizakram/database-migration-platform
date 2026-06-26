@@ -18,6 +18,9 @@ public class ReconciliationRun {
     @Column(nullable = false)
     private String status;
 
+    @Column(nullable = false)
+    private String mode = "COUNT";
+
     @Column(name = "total_tables", nullable = false)
     private int totalTables;
 
@@ -42,6 +45,8 @@ public class ReconciliationRun {
     public void setProjectId(UUID projectId) { this.projectId = projectId; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getMode() { return mode; }
+    public void setMode(String mode) { this.mode = mode; }
     public int getTotalTables() { return totalTables; }
     public void setTotalTables(int totalTables) { this.totalTables = totalTables; }
     public int getMismatched() { return mismatched; }

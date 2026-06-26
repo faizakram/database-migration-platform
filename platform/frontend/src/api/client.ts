@@ -56,8 +56,10 @@ export const usersApi = {
 };
 
 export const reconciliationApi = {
-  run: (projectId: string) =>
-    http.post<ReconciliationRun>(`/projects/${projectId}/reconciliation`).then((r) => r.data),
+  run: (projectId: string, mode: 'COUNT' | 'CHECKSUM' = 'COUNT', sampleSize = 1000) =>
+    http.post<ReconciliationRun>(`/projects/${projectId}/reconciliation`, null, {
+      params: { mode, sampleSize },
+    }).then((r) => r.data),
   history: (projectId: string) =>
     http.get<ReconciliationRun[]>(`/projects/${projectId}/reconciliation`).then((r) => r.data),
 };
