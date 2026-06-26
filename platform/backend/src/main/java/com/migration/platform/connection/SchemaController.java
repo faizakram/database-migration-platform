@@ -37,7 +37,8 @@ public class SchemaController {
     @GetMapping("/type-mapping")
     public List<ColumnMapping> typeMapping(@PathVariable UUID id,
                                            @RequestParam String schema,
-                                           @RequestParam String table) {
-        return typeMapping.proposeForTable(id, schema, table);
+                                           @RequestParam String table,
+                                           @RequestParam(required = false) UUID projectId) {
+        return typeMapping.proposeForTable(id, schema, table, projectId);
     }
 }

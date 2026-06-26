@@ -87,9 +87,9 @@ export const schemaApi = {
     http.get<ColumnInfo[]>(`/connections/${connectionId}/schema/columns`, {
       params: { schema, table },
     }).then((r) => r.data),
-  typeMapping: (connectionId: string, schema: string, table: string) =>
+  typeMapping: (connectionId: string, schema: string, table: string, projectId?: string) =>
     http.get<ColumnMapping[]>(`/connections/${connectionId}/schema/type-mapping`, {
-      params: { schema, table },
+      params: projectId ? { schema, table, projectId } : { schema, table },
     }).then((r) => r.data),
 };
 
