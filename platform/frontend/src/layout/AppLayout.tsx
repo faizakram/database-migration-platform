@@ -1,10 +1,13 @@
-import { Layout, Menu, Typography, Space, Dropdown, Avatar, Tag } from 'antd';
+import { Layout, Menu, Typography, Space, Dropdown, Avatar, Tag, Badge } from 'antd';
 import {
   DashboardOutlined, DatabaseOutlined, ProjectOutlined, UserOutlined, LogoutOutlined, TeamOutlined,
+  BellOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { alertsApi } from '../api/client';
 
 const { Header, Sider, Content } = Layout;
 
@@ -12,11 +15,16 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const firing = useQuery({ queryKey: ['alerts-count'], queryFn: alertsApi.count, refetchInterval: 15000 });
 
   const items = [
     { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
     { key: '/projects', icon: <ProjectOutlined />, label: 'Projects' },
     { key: '/connections', icon: <DatabaseOutlined />, label: 'Connections' },
+    {
+      key: '/alerts', icon: <BellOutlined />,
+      label: <Space>Alerts<Badge count={firing.data?.firing ?? 0} size="small" /></Space>,
+    },
     ...(user?.role === 'ADMIN' ? [{ key: '/users', icon: <TeamOutlined />, label: 'Users' }] : []),
   ];
   const selected = items.find((i) => i.key !== '/' && location.pathname.startsWith(i.key))?.key
