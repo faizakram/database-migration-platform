@@ -145,6 +145,7 @@ export interface ReconciliationResult {
   difference: number | null;
   sampled: number | null;
   missing: number | null;
+  changed: number | null;
   status: 'MATCH' | 'MISMATCH' | 'ERROR' | 'SKIPPED';
   error: string | null;
 }

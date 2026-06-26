@@ -38,6 +38,26 @@ class ReconciliationLogicTest {
     }
 
     @Test
+    void normalizeValueCanonicalisesEquivalentForms() {
+        assertThat(ReconciliationLogic.normalizeValue(null)).isEqualTo("∅");
+        assertThat(ReconciliationLogic.normalizeValue(new java.math.BigDecimal("1.50")))
+                .isEqualTo(ReconciliationLogic.normalizeValue(new java.math.BigDecimal("1.5")));
+        assertThat(ReconciliationLogic.normalizeValue(42)).isEqualTo("42");
+        assertThat(ReconciliationLogic.normalizeValue(Boolean.TRUE)).isEqualTo("true");
+        assertThat(ReconciliationLogic.normalizeValue("  abc  ")).isEqualTo("abc");
+    }
+
+    @Test
+    void rowChecksumIsStableAndOrderSensitive() {
+        var a = ReconciliationLogic.rowChecksum(List.of("1", "alice", "true"));
+        var b = ReconciliationLogic.rowChecksum(List.of("1", "alice", "true"));
+        var changed = ReconciliationLogic.rowChecksum(List.of("1", "bob", "true"));
+        assertThat(a).isEqualTo(b);
+        assertThat(a).isNotEqualTo(changed);
+        assertThat(a).hasSize(64); // SHA-256 hex
+    }
+
+    @Test
     void normalizeKeyLowercasesAndTrims() {
         assertThat(ReconciliationLogic.normalizeKey("  ABC-123  ")).isEqualTo("abc-123");
         assertThat(ReconciliationLogic.normalizeKey(42)).isEqualTo("42");

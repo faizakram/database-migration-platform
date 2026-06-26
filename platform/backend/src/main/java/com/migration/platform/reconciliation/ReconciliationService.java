@@ -146,37 +146,73 @@ public class ReconciliationService {
             }
             String pk = pkOpt.get();
 
-            // Sample normalised PK values from the source (ordered for determinism).
-            Set<String> sample = new LinkedHashSet<>();
-            String srcSql = "SELECT TOP (" + Math.max(1, sampleSize) + ") [" + pk + "] AS k FROM ["
+            // Sample full source rows (keyed by normalised PK) so we can compare content too.
+            Map<String, Map<String, Object>> srcRows = new LinkedHashMap<>();
+            List<String> srcCols = new ArrayList<>();
+            String srcSql = "SELECT TOP (" + Math.max(1, sampleSize) + ") * FROM ["
                     + schema + "].[" + table + "] ORDER BY [" + pk + "]";
             try (Statement st = sc.createStatement(); ResultSet rs = st.executeQuery(srcSql)) {
+                ResultSetMetaData md = rs.getMetaData();
+                for (int i = 1; i <= md.getColumnCount(); i++) srcCols.add(md.getColumnLabel(i));
                 while (rs.next()) {
-                    String k = ReconciliationLogic.normalizeKey(rs.getObject("k"));
-                    if (k != null) sample.add(k);
+                    String key = ReconciliationLogic.normalizeKey(rs.getObject(pk));
+                    if (key == null) continue;
+                    Map<String, Object> row = new HashMap<>();
+                    for (String c : srcCols) row.put(c, rs.getObject(c));
+                    srcRows.put(key, row);
                 }
             }
+            Set<String> sample = srcRows.keySet();
 
-            // Which of the sampled keys exist in the target (PK cast to lower text to bridge type conversion).
-            Set<String> present = new HashSet<>();
+            // Fetch the matching target rows (PK cast to lower text to bridge the type conversion).
+            String tgtPk = ReconciliationLogic.snakeCase(pk);
+            Map<String, Map<String, Object>> tgtRows = new HashMap<>();
+            Set<String> tgtCols = new HashSet<>();
             if (!sample.isEmpty()) {
-                String tgtPk = ReconciliationLogic.snakeCase(pk);
-                String tgtSql = "SELECT lower(cast(" + tgtPk + " AS text)) AS k FROM "
-                        + targetSchema + "." + ReconciliationLogic.snakeCase(table)
+                String tgtSql = "SELECT * FROM " + targetSchema + "." + ReconciliationLogic.snakeCase(table)
                         + " WHERE lower(cast(" + tgtPk + " AS text)) = ANY(?)"
                         + (softDelete ? " AND __cdc_deleted IS NOT TRUE" : "");
                 try (PreparedStatement ps = tc.prepareStatement(tgtSql)) {
                     ps.setArray(1, tc.createArrayOf("text", sample.toArray()));
                     try (ResultSet rs = ps.executeQuery()) {
-                        while (rs.next()) present.add(rs.getString("k"));
+                        ResultSetMetaData md = rs.getMetaData();
+                        for (int i = 1; i <= md.getColumnCount(); i++) tgtCols.add(md.getColumnLabel(i).toLowerCase());
+                        while (rs.next()) {
+                            String key = ReconciliationLogic.normalizeKey(rs.getObject(tgtPk));
+                            if (key == null) continue;
+                            Map<String, Object> row = new HashMap<>();
+                            for (String c : tgtCols) row.put(c, rs.getObject(c));
+                            tgtRows.put(key, row);
+                        }
                     }
                 }
             }
 
-            var outcome = ReconciliationLogic.evaluateSample(sample, present);
-            r.setSampled(outcome.sampled());
-            r.setMissing(outcome.missing());
-            r.setStatus(outcome.status());
+            // Compare non-PK source columns whose snake_case form exists on the target.
+            List<String> compareCols = srcCols.stream()
+                    .filter(c -> !c.equalsIgnoreCase(pk))
+                    .filter(c -> tgtCols.contains(ReconciliationLogic.snakeCase(c)))
+                    .sorted()
+                    .toList();
+
+            long missing = 0, changed = 0;
+            for (String key : sample) {
+                Map<String, Object> tgt = tgtRows.get(key);
+                if (tgt == null) { missing++; continue; }
+                Map<String, Object> src = srcRows.get(key);
+                String srcHash = ReconciliationLogic.rowChecksum(
+                        compareCols.stream().map(c -> ReconciliationLogic.normalizeValue(src.get(c))).toList());
+                String tgtHash = ReconciliationLogic.rowChecksum(
+                        compareCols.stream()
+                                .map(c -> ReconciliationLogic.normalizeValue(tgt.get(ReconciliationLogic.snakeCase(c))))
+                                .toList());
+                if (!srcHash.equals(tgtHash)) changed++;
+            }
+
+            r.setSampled((long) sample.size());
+            r.setMissing(missing);
+            r.setChanged(changed);
+            r.setStatus((missing == 0 && changed == 0) ? "MATCH" : "MISMATCH");
         } catch (Exception e) {
             r.setStatus("ERROR");
             r.setError(e.getMessage());

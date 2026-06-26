@@ -12,12 +12,12 @@ public final class ReconciliationDtos {
     public record ResultDto(
             String schemaName, String tableName,
             Long sourceCount, Long targetCount, Long difference,
-            Long sampled, Long missing,
+            Long sampled, Long missing, Long changed,
             String status, String error
     ) {
         public static ResultDto from(ReconciliationResult r) {
             return new ResultDto(r.getSchemaName(), r.getTableName(), r.getSourceCount(),
-                    r.getTargetCount(), r.getDifference(), r.getSampled(), r.getMissing(),
+                    r.getTargetCount(), r.getDifference(), r.getSampled(), r.getMissing(), r.getChanged(),
                     r.getStatus(), r.getError());
         }
     }

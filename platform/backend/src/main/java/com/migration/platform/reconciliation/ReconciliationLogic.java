@@ -1,7 +1,14 @@
 package com.migration.platform.reconciliation;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.temporal.ChronoUnit;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -36,6 +43,43 @@ public final class ReconciliationLogic {
     /** Normalises a primary-key value so SQL Server and PostgreSQL forms compare (e.g. GUID case). */
     public static String normalizeKey(Object value) {
         return value == null ? null : value.toString().trim().toLowerCase();
+    }
+
+    /**
+     * Canonicalises a column value so equivalent MSSQL/PostgreSQL representations hash the same
+     * (best effort): numbers via BigDecimal (1.50 == 1.5), timestamps truncated to seconds, bytes
+     * base64, null as a sentinel. Strings are only trimmed (no numeric coercion).
+     */
+    public static String normalizeValue(Object v) {
+        if (v == null) return "∅";
+        if (v instanceof byte[] b) return Base64.getEncoder().encodeToString(b);
+        if (v instanceof Boolean bool) return bool ? "true" : "false";
+        if (v instanceof Number n) {
+            try { return new BigDecimal(n.toString()).stripTrailingZeros().toPlainString(); }
+            catch (NumberFormatException e) { return n.toString(); }
+        }
+        if (v instanceof java.sql.Timestamp ts) {
+            return ts.toInstant().truncatedTo(ChronoUnit.SECONDS).toString();
+        }
+        if (v instanceof java.time.OffsetDateTime odt) {
+            return odt.toInstant().truncatedTo(ChronoUnit.SECONDS).toString();
+        }
+        if (v instanceof java.time.Instant inst) {
+            return inst.truncatedTo(ChronoUnit.SECONDS).toString();
+        }
+        return v.toString().trim();
+    }
+
+    /** SHA-256 (hex) over normalized values in a stable column order — a row content checksum. */
+    public static String rowChecksum(List<String> normalizedValuesInColumnOrder) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(String.join("", normalizedValuesInColumnOrder)
+                    .getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (Exception e) {
+            throw new IllegalStateException("Checksum failed", e);
+        }
     }
 
     private ReconciliationLogic() {}
