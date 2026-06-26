@@ -39,13 +39,14 @@ public class ReconciliationController {
     @GetMapping(value = "/reconciliation/{runId}/report.csv", produces = "text/csv")
     public ResponseEntity<byte[]> report(@PathVariable UUID runId) {
         RunDto run = service.report(runId);
-        StringBuilder sb = new StringBuilder("schema,table,status,source_count,target_count,difference,sampled,missing,error\n");
+        StringBuilder sb = new StringBuilder(
+                "schema,table,status,source_count,target_count,difference,sampled,missing,changed,error\n");
         for (ResultDto r : run.results()) {
             sb.append(csv(r.schemaName())).append(',').append(csv(r.tableName())).append(',')
               .append(csv(r.status())).append(',').append(n(r.sourceCount())).append(',')
               .append(n(r.targetCount())).append(',').append(n(r.difference())).append(',')
               .append(n(r.sampled())).append(',').append(n(r.missing())).append(',')
-              .append(csv(r.error())).append('\n');
+              .append(n(r.changed())).append(',').append(csv(r.error())).append('\n');
         }
         byte[] body = sb.toString().getBytes(StandardCharsets.UTF_8);
         return ResponseEntity.ok()

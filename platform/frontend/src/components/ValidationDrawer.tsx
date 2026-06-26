@@ -77,6 +77,7 @@ export default function ValidationDrawer({ project, onClose }: { project: Projec
   const checksumCols = [
     { title: 'Sampled', dataIndex: 'sampled', render: (v: number | null) => v ?? '—' },
     { title: 'Missing in target', dataIndex: 'missing', render: (v: number | null) => (v == null ? '—' : <span style={{ color: v === 0 ? undefined : '#cf1322' }}>{v}</span>) },
+    { title: 'Changed (content)', dataIndex: 'changed', render: (v: number | null) => (v == null ? '—' : <span style={{ color: v === 0 ? undefined : '#cf1322' }}>{v}</span>) },
   ];
   const statusCol = [{
     title: 'Status', dataIndex: 'status',
@@ -132,7 +133,7 @@ export default function ValidationDrawer({ project, onClose }: { project: Projec
       <Typography.Paragraph type="secondary">
         {mode === 'COUNT'
           ? 'Compares row counts per selected table (source vs target). Soft-deleted rows are excluded from the target count when the project uses soft delete.'
-          : 'Samples primary keys from the source and checks they exist in the target — catches identity gaps that equal counts can miss. Single-primary-key tables only.'}
+          : 'Samples rows from the source, checks each exists in the target (Missing), and compares normalized column values via a row checksum (Changed). Catches identity gaps and value drift that equal counts miss. Single-primary-key tables only; content comparison is best-effort (timestamps compared to the second).'}
       </Typography.Paragraph>
 
       {latest && (

@@ -28,9 +28,11 @@ public class ReconciliationResult {
 
     private Long difference;
 
-    /** CHECKSUM mode: rows sampled from source, and how many of those PKs were absent in target. */
+    /** CHECKSUM mode: rows sampled from source, how many PKs were absent in target, and how many
+     *  present-on-both rows had differing content (value mismatch). */
     private Long sampled;
     private Long missing;
+    private Long changed;
 
     @Column(nullable = false)
     private String status;
@@ -61,6 +63,8 @@ public class ReconciliationResult {
     public void setSampled(Long sampled) { this.sampled = sampled; }
     public Long getMissing() { return missing; }
     public void setMissing(Long missing) { this.missing = missing; }
+    public Long getChanged() { return changed; }
+    public void setChanged(Long changed) { this.changed = changed; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public String getError() { return error; }
