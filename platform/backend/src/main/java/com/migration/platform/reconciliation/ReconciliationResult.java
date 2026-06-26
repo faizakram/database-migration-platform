@@ -28,6 +28,10 @@ public class ReconciliationResult {
 
     private Long difference;
 
+    /** CHECKSUM mode: rows sampled from source, and how many of those PKs were absent in target. */
+    private Long sampled;
+    private Long missing;
+
     @Column(nullable = false)
     private String status;
 
@@ -53,6 +57,10 @@ public class ReconciliationResult {
     public void setTargetCount(Long targetCount) { this.targetCount = targetCount; }
     public Long getDifference() { return difference; }
     public void setDifference(Long difference) { this.difference = difference; }
+    public Long getSampled() { return sampled; }
+    public void setSampled(Long sampled) { this.sampled = sampled; }
+    public Long getMissing() { return missing; }
+    public void setMissing(Long missing) { this.missing = missing; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public String getError() { return error; }

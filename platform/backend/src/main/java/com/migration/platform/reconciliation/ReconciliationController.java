@@ -16,10 +16,12 @@ public class ReconciliationController {
         this.service = service;
     }
 
-    /** Trigger a reconciliation run (synchronous). */
+    /** Trigger a reconciliation run (synchronous). mode = COUNT (default) | CHECKSUM. */
     @PostMapping
-    public RunDto run(@PathVariable UUID projectId) {
-        return service.run(projectId);
+    public RunDto run(@PathVariable UUID projectId,
+                      @RequestParam(defaultValue = "COUNT") String mode,
+                      @RequestParam(defaultValue = "1000") int sampleSize) {
+        return service.run(projectId, mode, sampleSize);
     }
 
     /** Past runs with their per-table results. */

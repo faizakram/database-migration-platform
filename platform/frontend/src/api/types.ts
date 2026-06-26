@@ -132,7 +132,9 @@ export interface ReconciliationResult {
   sourceCount: number | null;
   targetCount: number | null;
   difference: number | null;
-  status: 'MATCH' | 'MISMATCH' | 'ERROR';
+  sampled: number | null;
+  missing: number | null;
+  status: 'MATCH' | 'MISMATCH' | 'ERROR' | 'SKIPPED';
   error: string | null;
 }
 
@@ -140,6 +142,7 @@ export interface ReconciliationRun {
   id: string;
   projectId: string;
   status: string;
+  mode: string;
   totalTables: number;
   mismatched: number;
   startedAt: string;
