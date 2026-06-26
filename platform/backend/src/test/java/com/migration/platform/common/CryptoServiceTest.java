@@ -36,6 +36,14 @@ class CryptoServiceTest {
     }
 
     @Test
+    void acceptsTheShippedDefaultKey() {
+        // Guards against shipping a default crypto key of the wrong length (caught by CI once).
+        String defaultKey = "ZGV2LW9ubHktYWVzMjU2LWtleS1jaGFuZ2UtbWUhISE=";
+        CryptoService crypto = new CryptoService(props(defaultKey));
+        assertThat(crypto.decrypt(crypto.encrypt("ok"))).isEqualTo("ok");
+    }
+
+    @Test
     void rejectsKeyThatIsNot32Bytes() {
         String shortKey = Base64.getEncoder().encodeToString(new byte[16]);
         assertThatThrownBy(() -> new CryptoService(props(shortKey)))
