@@ -264,3 +264,18 @@ export interface EngineSpec {
 
 export interface CdcCheck { name: string; ok: boolean; detail: string; remediation: string; }
 export interface CdcReadiness { engine: DbType; cdcStyle: string; ready: boolean; checks: CdcCheck[]; }
+
+export interface PlanTable {
+  fqName: string; rowCount: number; bytes: number; level: number; hasPk: boolean; risks: string[];
+}
+export interface MigrationPlan {
+  tables: PlanTable[]; levels: number; hasCycles: boolean;
+  totalRows: number; totalBytes: number; estimatedSeconds: number; risks: string[];
+}
+
+export interface SchemaObject {
+  category: string; schema: string; name: string; status: string; detail: string;
+}
+export interface SchemaObjectInventory {
+  engine: DbType; migratable: number; reportOnly: number; objects: SchemaObject[];
+}

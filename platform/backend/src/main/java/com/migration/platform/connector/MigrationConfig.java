@@ -18,7 +18,8 @@ public record MigrationConfig(
         int tasksMax,
         String schemaEvolution,   // sink DDL evolution: basic | none (#26)
         int snapshotMaxThreads,   // parallel snapshot workers (#27)
-        int snapshotFetchSize     // snapshot row fetch size (#27)
+        int snapshotFetchSize,    // snapshot row fetch size (#27)
+        NamingStrategy namingStrategy   // identifier naming on the target (#84); default PRESERVE
 ) {
     public static MigrationConfig from(Map<String, Object> cfg, String projectName) {
         cfg = cfg == null ? Map.of() : cfg;
@@ -33,7 +34,8 @@ public record MigrationConfig(
                 intVal(cfg, "tasksMax", 1),
                 str(cfg, "schemaEvolution", "basic"),
                 Math.max(1, intVal(cfg, "snapshotMaxThreads", 1)),
-                Math.max(1, intVal(cfg, "snapshotFetchSize", 2000))
+                Math.max(1, intVal(cfg, "snapshotFetchSize", 2000)),
+                NamingStrategy.parse(str(cfg, "namingStrategy", "preserve"))
         );
     }
 

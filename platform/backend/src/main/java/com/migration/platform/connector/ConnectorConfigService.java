@@ -87,9 +87,17 @@ public class ConnectorConfigService {
             cfg.put("transforms.castDeleted.spec", "__cdc_deleted:boolean");
         }
 
-        transforms.append(",snakeCaseKey,snakeCaseValue,typeConversion");
-        cfg.put("transforms.snakeCaseKey.type", "com.debezium.transforms.SnakeCaseTransform$Key");
-        cfg.put("transforms.snakeCaseValue.type", "com.debezium.transforms.SnakeCaseTransform$Value");
+        // Naming strategy (#84): PRESERVE keeps source names exactly (no rename SMT); the others
+        // apply a deterministic case transform via the custom SMT.
+        NamingStrategy ns = mc.namingStrategy();
+        if (!ns.isPreserve()) {
+            transforms.append(",caseKey,caseValue");
+            cfg.put("transforms.caseKey.type", "com.debezium.transforms.SnakeCaseTransform$Key");
+            cfg.put("transforms.caseValue.type", "com.debezium.transforms.SnakeCaseTransform$Value");
+            cfg.put("transforms.caseKey.strategy", ns.smtValue());
+            cfg.put("transforms.caseValue.strategy", ns.smtValue());
+        }
+        transforms.append(",typeConversion");
         cfg.put("transforms.typeConversion.type", "com.debezium.transforms.TypeConversionTransform");
         if (!mc.uuidColumns().isEmpty()) {
             cfg.put("transforms.typeConversion.uuid.columns", String.join(",", mc.uuidColumns()));
@@ -104,7 +112,9 @@ public class ConnectorConfigService {
         cfg.put("delete.enabled", String.valueOf(hard));
         cfg.put("primary.key.mode", "record_key");
         cfg.put("schema.evolution", mc.schemaEvolution());
-        cfg.put("quote.identifiers", "false");
+        // Quote identifiers unless the names are already lowercase snake_case — so PRESERVE / camel /
+        // Pascal / UPPER case survive exactly on the target (e.g. PostgreSQL would otherwise fold them).
+        cfg.put("quote.identifiers", String.valueOf(ns != NamingStrategy.SNAKE_CASE));
 
         return payload(sinkName(p), cfg);
     }
