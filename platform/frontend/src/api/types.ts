@@ -31,7 +31,7 @@ export interface UserAdmin {
   createdAt: string;
 }
 
-export type DbType = 'SQLSERVER' | 'POSTGRESQL';
+export type DbType = 'SQLSERVER' | 'POSTGRESQL' | 'MYSQL' | 'ORACLE' | 'DB2';
 
 export type ProjectStatus = 'DRAFT' | 'READY' | 'ACTIVE' | 'ARCHIVED';
 
@@ -249,3 +249,18 @@ export interface AuditPage {
   size: number;
   total: number;
 }
+
+export interface EngineSpec {
+  type: DbType;
+  displayName: string;
+  defaultPort: number;
+  driverClass: string;
+  jdbcUrlTemplate: string;
+  canSource: boolean;
+  canSink: boolean;
+  debeziumConnector: string | null;
+  cdcStyle: string;
+}
+
+export interface CdcCheck { name: string; ok: boolean; detail: string; remediation: string; }
+export interface CdcReadiness { engine: DbType; cdcStyle: string; ready: boolean; checks: CdcCheck[]; }

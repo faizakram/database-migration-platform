@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TypeMappingServiceTest {
 
     // propose() does not touch the injected dependencies.
-    private final TypeMappingService svc = new TypeMappingService(null, null);
+    private final TypeMappingService svc = new TypeMappingService(null, null, null);
 
     private ColumnMapping map(String type, int size, String name) {
         return svc.propose(new ColumnInfo(name, type, size, true, false));

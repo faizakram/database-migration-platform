@@ -51,17 +51,22 @@ public class TypeMappingService {
 
     private final SchemaDiscoveryService discovery;
     private final ProjectRepository projects;
+    private final ConnectionRepository connections;
 
-    public TypeMappingService(SchemaDiscoveryService discovery, ProjectRepository projects) {
+    public TypeMappingService(SchemaDiscoveryService discovery, ProjectRepository projects,
+                              ConnectionRepository connections) {
         this.discovery = discovery;
         this.projects = projects;
+        this.connections = connections;
     }
 
-    /** Per-table proposals, applying any per-project override rules. */
+    /** Per-table proposals for the project's source→target engine pair, with per-project overrides. */
     public List<ColumnMapping> proposeForTable(UUID connectionId, String schema, String table, UUID projectId) {
         Map<String, String> overrides = resolveOverrides(projectId);
+        DbType srcEngine = connections.findById(connectionId).map(DbConnection::getDbType).orElse(DbType.SQLSERVER);
+        DbType tgtEngine = resolveTargetEngine(projectId);
         return discovery.listColumns(connectionId, schema, table).stream()
-                .map(c -> propose(c, overrides))
+                .map(c -> propose(c, overrides, srcEngine, tgtEngine))
                 .toList();
     }
 
@@ -69,14 +74,36 @@ public class TypeMappingService {
         return propose(c, Map.of());
     }
 
-    /** Pure mapping for a single column with explicit overrides — exposed for unit testing. */
+    /** Backward-compatible default pair (SQL Server → PostgreSQL). */
     public ColumnMapping propose(ColumnInfo c, Map<String, String> overrides) {
+        return propose(c, overrides, DbType.SQLSERVER, DbType.POSTGRESQL);
+    }
+
+    /** Pair-aware mapping for a single column (#81). The well-established SQL Server→PostgreSQL rules
+     *  stay as-is; other pairs (and homogeneous) go through {@link TypeMappingMatrix}. */
+    public ColumnMapping propose(ColumnInfo c, Map<String, String> overrides, DbType srcEngine, DbType tgtEngine) {
         String src = c.dataType() == null ? "" : c.dataType().toLowerCase();
-        String pg = mapType(src, c.size(), overrides);
-        String semantic = detectSemantic(src, c.name());
-        // Only flag a note when the mapping is the default (an explicit override is the user's choice).
-        String note = (overrides != null && overrides.containsKey(src)) ? null : TYPE_NOTES.get(src);
-        return new ColumnMapping(c.name(), c.dataType(), c.size(), c.nullable(), c.primaryKey(), pg, semantic, note);
+        if (overrides != null && overrides.containsKey(src)) {
+            return new ColumnMapping(c.name(), c.dataType(), c.size(), c.nullable(), c.primaryKey(),
+                    overrides.get(src), detectSemantic(src, c.name()), null);
+        }
+        if (srcEngine == DbType.SQLSERVER && tgtEngine == DbType.POSTGRESQL) {
+            String pg = mapType(src, c.size(), overrides);
+            return new ColumnMapping(c.name(), c.dataType(), c.size(), c.nullable(), c.primaryKey(),
+                    pg, detectSemantic(src, c.name()), TYPE_NOTES.get(src));
+        }
+        TypeMappingMatrix.Mapped m = TypeMappingMatrix.map(srcEngine, tgtEngine, c.dataType(), c.size());
+        return new ColumnMapping(c.name(), c.dataType(), c.size(), c.nullable(), c.primaryKey(),
+                m.targetType(), detectSemantic(src, c.name()), m.note());
+    }
+
+    private DbType resolveTargetEngine(UUID projectId) {
+        if (projectId == null) return DbType.POSTGRESQL;
+        return projects.findById(projectId)
+                .map(MigrationProject::getTargetConnectionId)
+                .flatMap(connections::findById)
+                .map(DbConnection::getDbType)
+                .orElse(DbType.POSTGRESQL);
     }
 
     private String mapType(String src, int size, Map<String, String> overrides) {

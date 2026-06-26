@@ -30,25 +30,31 @@ public class JdbcSupport {
         Properties props = new Properties();
         props.setProperty("user", username);
         props.setProperty("password", password);
-        if (type == DbType.SQLSERVER) {
-            props.setProperty("encrypt", String.valueOf(optBool(options, "encrypt", true)));
-            if (optBool(options, "trustServerCertificate", false)) {
-                props.setProperty("trustServerCertificate", "true");
+        switch (type) {
+            case SQLSERVER -> {
+                props.setProperty("encrypt", String.valueOf(optBool(options, "encrypt", true)));
+                if (optBool(options, "trustServerCertificate", false)) {
+                    props.setProperty("trustServerCertificate", "true");
+                }
+                props.setProperty("loginTimeout", "8");
             }
-            props.setProperty("loginTimeout", "8");
-        } else {
-            String sslmode = optStr(options, "sslmode");
-            if (sslmode != null) props.setProperty("sslmode", sslmode);
-            props.setProperty("connectTimeout", "8");
+            case POSTGRESQL -> {
+                String sslmode = optStr(options, "sslmode");
+                if (sslmode != null) props.setProperty("sslmode", sslmode);
+                props.setProperty("connectTimeout", "8");
+            }
+            case MYSQL -> {
+                String sslmode = optStr(options, "sslmode");
+                if (sslmode != null) props.setProperty("sslMode", sslmode);
+                props.setProperty("connectTimeout", "8000");
+            }
+            case ORACLE, DB2 -> { /* driver defaults; engine-specific tuning via connection options/URL */ }
         }
         return DriverManager.getConnection(buildUrl(type, host, port, database), props);
     }
 
     public String buildUrl(DbType type, String host, int port, String database) {
-        return switch (type) {
-            case SQLSERVER -> "jdbc:sqlserver://" + host + ":" + port + ";databaseName=" + database;
-            case POSTGRESQL -> "jdbc:postgresql://" + host + ":" + port + "/" + database;
-        };
+        return EngineCatalog.spec(type).jdbcUrl(host, port, database);
     }
 
     private boolean optBool(Map<String, Object> options, String key, boolean def) {

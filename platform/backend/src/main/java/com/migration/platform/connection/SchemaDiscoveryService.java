@@ -143,7 +143,13 @@ public class SchemaDiscoveryService {
 
     private String effectiveSchema(DbConnection c, String schemaFilter) {
         if (schemaFilter != null && !schemaFilter.isBlank()) return schemaFilter;
-        return c.getDbType() == DbType.SQLSERVER ? "dbo" : "public";
+        return switch (c.getDbType()) {
+            case SQLSERVER -> "dbo";
+            case POSTGRESQL -> "public";
+            case ORACLE -> c.getUsername() == null ? null : c.getUsername().toUpperCase();
+            // MySQL/Db2 expose tables under the catalog (database), not a separate schema pattern.
+            case MYSQL, DB2 -> null;
+        };
     }
 
     private boolean hasPrimaryKey(DatabaseMetaData md, String catalog, String schema, String table)

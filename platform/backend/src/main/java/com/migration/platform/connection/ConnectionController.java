@@ -16,14 +16,28 @@ import java.util.UUID;
 public class ConnectionController {
 
     private final ConnectionService service;
+    private final CdcReadinessService readiness;
 
-    public ConnectionController(ConnectionService service) {
+    public ConnectionController(ConnectionService service, CdcReadinessService readiness) {
         this.service = service;
+        this.readiness = readiness;
     }
 
     @GetMapping
     public List<ConnectionResponse> list() {
         return service.list();
+    }
+
+    /** The supported-engine catalog that drives the connection form + pair validation (#76/#82). */
+    @GetMapping("/engines")
+    public List<EngineCatalog.EngineSpec> engines() {
+        return EngineCatalog.all();
+    }
+
+    /** Per-engine CDC prerequisite checks for a saved connection (#80). */
+    @GetMapping("/{id}/cdc-readiness")
+    public CdcReadinessService.Readiness cdcReadiness(@PathVariable UUID id) {
+        return readiness.check(id);
     }
 
     @GetMapping("/{id}")

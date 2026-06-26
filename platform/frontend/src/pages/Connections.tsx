@@ -2,20 +2,24 @@ import { useState } from 'react';
 import {
   Button, Card, Collapse, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, App,
 } from 'antd';
-import { PlusOutlined, ThunderboltOutlined, DeleteOutlined, DatabaseOutlined } from '@ant-design/icons';
+import { PlusOutlined, ThunderboltOutlined, DeleteOutlined, DatabaseOutlined, SafetyOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { connectionsApi } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import EmptyState from '../components/EmptyState';
 import type { Connection, ConnectionRequest, DbType } from '../api/types';
 
-const DEFAULT_PORT: Record<DbType, number> = { SQLSERVER: 1433, POSTGRESQL: 5432 };
+export const ENGINE_COLOR: Record<DbType, string> = {
+  SQLSERVER: 'volcano', POSTGRESQL: 'geekblue', MYSQL: 'gold', ORACLE: 'red', DB2: 'cyan',
+};
 
 interface ConnForm extends Omit<ConnectionRequest, 'options'> {
   encrypt?: boolean;
   trustServerCertificate?: boolean;
   sslmode?: string;
 }
+
+const SSL_ENGINES: DbType[] = ['POSTGRESQL', 'MYSQL'];
 
 function buildRequest(v: ConnForm): ConnectionRequest {
   const options: Record<string, unknown> = {};
@@ -41,6 +45,9 @@ export default function Connections() {
   const dbType = Form.useWatch('dbType', form);
 
   const { data, isLoading } = useQuery({ queryKey: ['connections'], queryFn: connectionsApi.list });
+  const engines = useQuery({ queryKey: ['engines'], queryFn: connectionsApi.engines });
+  const portByEngine = (t: DbType): number =>
+    engines.data?.find((e) => e.type === t)?.defaultPort ?? 1433;
 
   const create = useMutation({
     mutationFn: connectionsApi.create,
@@ -63,6 +70,29 @@ export default function Connections() {
 
   const testAdhoc = useMutation({ mutationFn: connectionsApi.testAdhoc });
 
+  const cdcCheck = async (row: Connection) => {
+    try {
+      const r = await connectionsApi.cdcReadiness(row.id);
+      modal.info({
+        title: `CDC readiness — ${row.name} (${r.engine}, ${r.cdcStyle})`,
+        width: 560,
+        content: (
+          <Space direction="vertical" style={{ width: '100%', marginTop: 8 }}>
+            {r.checks.map((c) => (
+              <div key={c.name}>
+                <Tag color={c.ok ? 'green' : 'red'}>{c.ok ? 'OK' : 'FIX'}</Tag>
+                <strong>{c.name}</strong> — {c.detail}
+                {!c.ok && <div style={{ color: '#8A93A3', fontSize: 12, marginLeft: 4 }}>↳ {c.remediation}</div>}
+              </div>
+            ))}
+          </Space>
+        ),
+      });
+    } catch (e: any) {
+      message.error(e?.response?.data?.message ?? 'Readiness check failed');
+    }
+  };
+
   const handleTest = async () => {
     try {
       const values = await form.validateFields();
@@ -77,8 +107,8 @@ export default function Connections() {
   const columns = [
     { title: 'Name', dataIndex: 'name' },
     {
-      title: 'Type', dataIndex: 'dbType',
-      render: (t: DbType) => <Tag color={t === 'SQLSERVER' ? 'volcano' : 'geekblue'}>{t}</Tag>,
+      title: 'Engine', dataIndex: 'dbType',
+      render: (t: DbType) => <Tag color={ENGINE_COLOR[t]}>{t}</Tag>,
     },
     { title: 'Host', dataIndex: 'host' },
     { title: 'Port', dataIndex: 'port' },
@@ -101,6 +131,7 @@ export default function Connections() {
           >
             Test
           </Button>
+          <Button size="small" icon={<SafetyOutlined />} onClick={() => cdcCheck(row)}>CDC</Button>
           <Button
             size="small" danger icon={<DeleteOutlined />} disabled={!canWrite}
             onClick={() => modal.confirm({
@@ -159,13 +190,15 @@ export default function Connections() {
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input placeholder="prod-source-mssql" />
           </Form.Item>
-          <Form.Item name="dbType" label="Type" rules={[{ required: true }]}>
+          <Form.Item name="dbType" label="Engine" rules={[{ required: true }]}
+            tooltip="Any engine can be a source and/or target — heterogeneous or homogeneous (#76)">
             <Select
-              onChange={(v: DbType) => form.setFieldValue('port', DEFAULT_PORT[v])}
-              options={[
-                { value: 'SQLSERVER', label: 'SQL Server (source)' },
-                { value: 'POSTGRESQL', label: 'PostgreSQL (target)' },
-              ]}
+              loading={engines.isLoading}
+              onChange={(v: DbType) => form.setFieldValue('port', portByEngine(v))}
+              options={(engines.data ?? []).map((e) => ({
+                value: e.type,
+                label: `${e.displayName} — ${[e.canSource && 'source', e.canSink && 'target'].filter(Boolean).join(' / ')}`,
+              }))}
             />
           </Form.Item>
           <Space.Compact block>
@@ -192,7 +225,7 @@ export default function Connections() {
             items={[{
               key: 'tls',
               label: 'TLS / encryption',
-              children: dbType === 'POSTGRESQL' ? (
+              children: SSL_ENGINES.includes(dbType) ? (
                 <Form.Item name="sslmode" label="SSL mode"
                   tooltip="PostgreSQL JDBC sslmode; use require/verify-full in production">
                   <Select allowClear placeholder="driver default" options={[

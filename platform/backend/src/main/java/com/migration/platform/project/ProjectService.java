@@ -2,6 +2,9 @@ package com.migration.platform.project;
 
 import com.migration.platform.audit.AuditService;
 import com.migration.platform.common.NotFoundException;
+import com.migration.platform.connection.ConnectionRepository;
+import com.migration.platform.connection.DbConnection;
+import com.migration.platform.connection.EngineCatalog;
 import com.migration.platform.project.dto.ProjectRequest;
 import com.migration.platform.project.dto.ProjectResponse;
 import org.springframework.stereotype.Service;
@@ -17,10 +20,22 @@ public class ProjectService {
 
     private final ProjectRepository repo;
     private final AuditService audit;
+    private final ConnectionRepository connections;
 
-    public ProjectService(ProjectRepository repo, AuditService audit) {
+    public ProjectService(ProjectRepository repo, AuditService audit, ConnectionRepository connections) {
         this.repo = repo;
         this.audit = audit;
+        this.connections = connections;
+    }
+
+    /** Reject unsupported source→target engine pairings server-side (#76/#82). */
+    private void validatePair(MigrationProject p) {
+        if (p.getSourceConnectionId() == null || p.getTargetConnectionId() == null) return;
+        DbConnection src = connections.findById(p.getSourceConnectionId()).orElse(null);
+        DbConnection tgt = connections.findById(p.getTargetConnectionId()).orElse(null);
+        if (src != null && tgt != null) {
+            EngineCatalog.validatePair(src.getDbType(), tgt.getDbType());
+        }
     }
 
     @Transactional(readOnly = true)
@@ -40,6 +55,7 @@ public class ProjectService {
         }
         MigrationProject p = new MigrationProject();
         apply(p, req);
+        validatePair(p);
         p = repo.save(p);
         audit.record("PROJECT_CREATE", p.getId().toString(), Map.of("name", req.name()));
         return ProjectResponse.from(p);
@@ -49,6 +65,7 @@ public class ProjectService {
     public ProjectResponse update(UUID id, ProjectRequest req) {
         MigrationProject p = find(id);
         apply(p, req);
+        validatePair(p);
         p = repo.save(p);
         audit.record("PROJECT_UPDATE", id.toString(), Map.of("name", req.name()));
         return ProjectResponse.from(p);
