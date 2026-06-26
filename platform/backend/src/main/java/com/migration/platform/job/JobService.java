@@ -84,6 +84,7 @@ public class JobService {
     @Transactional
     public JobResponse start(UUID id) {
         MigrationJob job = find(id);
+        JobTransitions.assertAllowed(JobTransitions.Action.START, job.getStatus());
         MigrationProject project = requireProject(job.getProjectId());
         try {
             DbConnection src = requireConnection(project.getSourceConnectionId(), "source");
@@ -118,6 +119,7 @@ public class JobService {
     @Transactional
     public JobResponse pause(UUID id) {
         MigrationJob job = find(id);
+        JobTransitions.assertAllowed(JobTransitions.Action.PAUSE, job.getStatus());
         forEachConnector(job, connect::pause);
         job.setStatus(JobStatus.PAUSED);
         return JobResponse.from(repo.save(job));
@@ -126,6 +128,7 @@ public class JobService {
     @Transactional
     public JobResponse resume(UUID id) {
         MigrationJob job = find(id);
+        JobTransitions.assertAllowed(JobTransitions.Action.RESUME, job.getStatus());
         forEachConnector(job, connect::resume);
         job.setStatus(JobStatus.RUNNING);
         return JobResponse.from(repo.save(job));
@@ -134,6 +137,7 @@ public class JobService {
     @Transactional
     public JobResponse stop(UUID id) {
         MigrationJob job = find(id);
+        JobTransitions.assertAllowed(JobTransitions.Action.STOP, job.getStatus());
         forEachConnector(job, name -> {
             try { connect.delete(name); }
             catch (Exception e) { log.warn("Could not delete connector {}: {}", name, e.getMessage()); }
