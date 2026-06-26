@@ -10,6 +10,17 @@ export interface MeResponse {
   role: string;
 }
 
+export interface AlertItem {
+  id: string;
+  projectId: string | null;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL';
+  type: string;
+  message: string;
+  status: 'FIRING' | 'RESOLVED' | 'ACKNOWLEDGED';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type RoleName = 'ADMIN' | 'OPERATOR' | 'VIEWER';
 
 export interface UserAdmin {

@@ -50,6 +50,11 @@ platform:
     # Scheduled drift-detection reconciliation (#49). Runs only for projects opted in
     # (config.autoReconcile = true). Default: every 6 hours.
     cron: ${RECONCILIATION_CRON:0 0 */6 * * *}
+  alerts:
+    # Optional Slack/Teams/custom incoming-webhook URL for notifications (#52). Empty = log only.
+    webhook-url: ${ALERTS_WEBHOOK_URL:}
+    # How often to check connector health for alerting. Default: every 2 minutes.
+    monitor-cron: ${ALERTS_MONITOR_CRON:0 */2 * * * *}
   auth:
     # HMAC-SHA256 signing key (>= 32 bytes). MUST be overridden in any real environment (#55).
     jwt-secret: ${JWT_SECRET:dev-only-jwt-signing-secret-change-me-please-32b+}

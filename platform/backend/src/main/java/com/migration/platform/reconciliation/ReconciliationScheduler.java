@@ -1,5 +1,6 @@
 package com.migration.platform.reconciliation;
 
+import com.migration.platform.alert.AlertService;
 import com.migration.platform.project.MigrationProject;
 import com.migration.platform.project.ProjectRepository;
 import com.migration.platform.project.ProjectStatus;
@@ -20,10 +21,13 @@ public class ReconciliationScheduler {
 
     private final ProjectRepository projects;
     private final ReconciliationService reconciliation;
+    private final AlertService alerts;
 
-    public ReconciliationScheduler(ProjectRepository projects, ReconciliationService reconciliation) {
+    public ReconciliationScheduler(ProjectRepository projects, ReconciliationService reconciliation,
+                                   AlertService alerts) {
         this.projects = projects;
         this.reconciliation = reconciliation;
+        this.alerts = alerts;
     }
 
     @Scheduled(cron = "${platform.reconciliation.cron}")
@@ -32,11 +36,16 @@ public class ReconciliationScheduler {
             if (p.getStatus() != ProjectStatus.ACTIVE || !optedIn(p)) continue;
             try {
                 RunDto run = reconciliation.run(p.getId(), "COUNT", 1000);
+                String dedup = "drift:" + p.getId();
                 if (run.mismatched() > 0) {
                     log.warn("Drift detected for project '{}' ({}): {}/{} tables mismatched",
                             p.getName(), p.getId(), run.mismatched(), run.totalTables());
+                    alerts.raise(dedup, "WARNING", "DRIFT",
+                            "Drift in project '" + p.getName() + "': " + run.mismatched() + "/"
+                                    + run.totalTables() + " tables mismatched", p.getId());
                 } else {
                     log.info("Scheduled reconciliation clean for project '{}' ({})", p.getName(), p.getId());
+                    alerts.resolve(dedup);
                 }
             } catch (Exception e) {
                 log.warn("Scheduled reconciliation failed for project {}: {}", p.getId(), e.getMessage());

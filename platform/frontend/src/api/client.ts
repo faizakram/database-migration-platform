@@ -3,7 +3,7 @@ import { tokenStore } from '../auth/token';
 import type {
   Connection, ConnectionRequest, TestResult,
   Project, ProjectRequest, Job, JobTableStatus, TableInfo, ColumnInfo, ColumnMapping, ProjectHealth,
-  ReconciliationRun, LoginResponse, MeResponse, UserAdmin, RoleName,
+  ReconciliationRun, LoginResponse, MeResponse, UserAdmin, RoleName, AlertItem,
 } from './types';
 
 const http = axios.create({ baseURL: '/api/v1' });
@@ -64,6 +64,12 @@ export const reconciliationApi = {
     http.get<ReconciliationRun[]>(`/projects/${projectId}/reconciliation`).then((r) => r.data),
   report: (runId: string) =>
     http.get(`/reconciliation/${runId}/report.csv`, { responseType: 'blob' }).then((r) => r.data as Blob),
+};
+
+export const alertsApi = {
+  list: () => http.get<AlertItem[]>('/alerts').then((r) => r.data),
+  count: () => http.get<{ firing: number }>('/alerts/count').then((r) => r.data),
+  acknowledge: (id: string) => http.post<AlertItem>(`/alerts/${id}/acknowledge`).then((r) => r.data),
 };
 
 export const monitoringApi = {
