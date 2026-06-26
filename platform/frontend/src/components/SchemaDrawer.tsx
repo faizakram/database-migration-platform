@@ -1,0 +1,141 @@
+import {
+  Drawer, Table, Tag, Alert, Button, Space, App, Typography, Spin,
+} from 'antd';
+import { KeyOutlined, SaveOutlined } from '@ant-design/icons';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { schemaApi, projectsApi } from '../api/client';
+import type { ColumnInfo, Project, TableInfo } from '../api/types';
+
+const keyOf = (t: TableInfo) => `${t.schemaName}.${t.tableName}`;
+
+function ColumnsTable({ connectionId, schema, table }: { connectionId: string; schema: string; table: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['columns', connectionId, schema, table],
+    queryFn: () => schemaApi.columns(connectionId, schema, table),
+  });
+  if (isLoading) return <Spin size="small" />;
+  return (
+    <Table<ColumnInfo>
+      size="small"
+      rowKey="name"
+      pagination={false}
+      dataSource={data}
+      columns={[
+        {
+          title: 'Column', dataIndex: 'name',
+          render: (n: string, c: ColumnInfo) => (
+            <Space>{c.primaryKey && <KeyOutlined style={{ color: '#faad14' }} />}{n}</Space>
+          ),
+        },
+        { title: 'Type', dataIndex: 'dataType' },
+        { title: 'Size', dataIndex: 'size' },
+        { title: 'Nullable', dataIndex: 'nullable', render: (v: boolean) => (v ? 'yes' : 'no') },
+      ]}
+    />
+  );
+}
+
+export default function SchemaDrawer({ project, onClose }: { project: Project | null; onClose: () => void }) {
+  const { message } = App.useApp();
+  const qc = useQueryClient();
+  const open = project !== null;
+  const connId = project?.sourceConnectionId;
+  const [selected, setSelected] = useState<string[]>([]);
+
+  useEffect(() => {
+    const saved = (project?.config?.selectedTables as string[] | undefined) ?? [];
+    setSelected(saved);
+  }, [project]);
+
+  const tables = useQuery({
+    queryKey: ['tables', connId],
+    queryFn: () => schemaApi.tables(connId!),
+    enabled: open && !!connId,
+  });
+
+  const save = useMutation({
+    mutationFn: () => projectsApi.update(project!.id, {
+      name: project!.name,
+      description: project!.description,
+      sourceConnectionId: project!.sourceConnectionId,
+      targetConnectionId: project!.targetConnectionId,
+      config: {
+        ...project!.config,
+        selectedTables: selected,
+        tableIncludeList: selected.join(','),
+      },
+    }),
+    onSuccess: () => {
+      message.success(`Saved ${selected.length} table(s)`);
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      onClose();
+    },
+    onError: (e: any) => message.error(e?.response?.data?.message ?? 'Save failed'),
+  });
+
+  const columns = [
+    { title: 'Schema', dataIndex: 'schemaName', width: 110 },
+    { title: 'Table', dataIndex: 'tableName' },
+    {
+      title: 'Primary key', dataIndex: 'hasPrimaryKey',
+      render: (v: boolean) => (v
+        ? <Tag color="green">PK</Tag>
+        : <Tag color="red">no PK</Tag>),
+    },
+    {
+      title: 'CDC', dataIndex: 'cdcEnabled',
+      render: (v: boolean) => (v
+        ? <Tag color="blue">enabled</Tag>
+        : <Tag>off</Tag>),
+    },
+  ];
+
+  return (
+    <Drawer
+      title={project ? `Select tables — ${project.name}` : ''}
+      width={820}
+      open={open}
+      onClose={onClose}
+      extra={
+        <Button type="primary" icon={<SaveOutlined />}
+          disabled={!connId} loading={save.isPending} onClick={() => save.mutate()}>
+          Save selection ({selected.length})
+        </Button>
+      }
+    >
+      {!connId && (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+          message="No source connection"
+          description="Assign a SQL Server source connection to this project before discovering tables." />
+      )}
+      {tables.isError && (
+        <Alert type="error" showIcon style={{ marginBottom: 16 }}
+          message="Discovery failed" description={(tables.error as any)?.response?.data?.message} />
+      )}
+      {selected.some((k) => tables.data?.find((t) => keyOf(t) === k && !t.hasPrimaryKey)) && (
+        <Alert type="info" showIcon style={{ marginBottom: 16 }}
+          message="Some selected tables have no primary key; upsert/CDC delete handling needs one." />
+      )}
+      <Typography.Paragraph type="secondary">
+        Expand a row to inspect columns. The selection drives the connector's table include list.
+      </Typography.Paragraph>
+      <Table<TableInfo>
+        rowKey={keyOf}
+        loading={tables.isLoading}
+        dataSource={tables.data}
+        columns={columns}
+        pagination={{ pageSize: 20 }}
+        rowSelection={{
+          selectedRowKeys: selected,
+          onChange: (keys) => setSelected(keys as string[]),
+        }}
+        expandable={{
+          expandedRowRender: (t) => connId
+            ? <ColumnsTable connectionId={connId} schema={t.schemaName} table={t.tableName} />
+            : null,
+        }}
+      />
+    </Drawer>
+  );
+}

@@ -1,0 +1,14 @@
+package com.migration.platform.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+/** Strongly-typed binding for the {@code platform.*} configuration tree. */
+@ConfigurationProperties(prefix = "platform")
+public record PlatformProperties(Connect connect, Crypto crypto, Cors cors) {
+
+    public record Connect(String baseUrl, String kafkaBootstrap) {}
+
+    public record Crypto(String key) {}
+
+    public record Cors(String allowedOrigins) {}
+}
