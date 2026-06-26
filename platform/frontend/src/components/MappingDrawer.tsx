@@ -36,7 +36,7 @@ export default function MappingDrawer({ project, onClose }: { project: Project |
 
   const mapping = useQuery({
     queryKey: ['type-mapping', connId, table],
-    queryFn: () => schemaApi.typeMapping(connId!, schemaName, tableName),
+    queryFn: () => schemaApi.typeMapping(connId!, schemaName, tableName, project!.id),
     enabled: open && !!connId && !!table,
   });
 
