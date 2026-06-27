@@ -305,6 +305,7 @@ export interface CostEstimate {
 export interface TableValidation {
   schema: string; table: string; sourceRows: number; targetRows: number;
   nullPrimaryKey: number; duplicateKeys: number; missingRows: number; extraRows: number;
+  cdcInserts: number; cdcUpdates: number; cdcDeletes: number;
   status: string; issues: string[];
 }
 export interface ValidationReport { tables: number; passed: number; failed: number; results: TableValidation[]; }

@@ -12,6 +12,7 @@ public final class ValidationDtos {
             long sourceRows, long targetRows,
             long nullPrimaryKey, long duplicateKeys,
             long missingRows, long extraRows,
+            long cdcInserts, long cdcUpdates, long cdcDeletes,  // CDC change activity on the source; -1 if N/A
             String status,            // PASS | FAIL | ERROR
             List<String> issues
     ) {}
