@@ -1,3 +1,11 @@
+/** Uniform paged-list envelope returned by the list endpoints (#127). */
+export interface Page<T> {
+  content: T[];
+  page: number;
+  size: number;
+  total: number;
+}
+
 export interface LoginResponse {
   token: string;
   username: string;

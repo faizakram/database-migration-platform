@@ -4,10 +4,17 @@ import com.migration.platform.auth.dto.UserDtos.CreateUserRequest;
 import com.migration.platform.auth.dto.UserDtos.UpdateUserRequest;
 import com.migration.platform.auth.dto.UserDtos.UserDto;
 import com.migration.platform.common.NotFoundException;
+import com.migration.platform.common.PageResponse;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -26,6 +33,23 @@ public class UserService {
     @Transactional(readOnly = true)
     public List<UserDto> list() {
         return repo.findAll().stream().map(UserDto::from).toList();
+    }
+
+    /** Paged + filterable user list (#127). {@code q} matches username; {@code role}/{@code enabled} exact. */
+    @Transactional(readOnly = true)
+    public PageResponse<UserDto> listPage(int page, int size, String q, Role role, Boolean enabled) {
+        Specification<AppUser> spec = (root, query, cb) -> {
+            List<Predicate> ps = new ArrayList<>();
+            if (q != null && !q.isBlank()) {
+                ps.add(cb.like(cb.lower(root.get("username")), "%" + q.toLowerCase() + "%"));
+            }
+            if (role != null) ps.add(cb.equal(root.get("role"), role));
+            if (enabled != null) ps.add(cb.equal(root.get("enabled"), enabled));
+            return cb.and(ps.toArray(new Predicate[0]));
+        };
+        Pageable pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 200),
+                Sort.by(Sort.Direction.ASC, "username"));
+        return PageResponse.of(repo.findAll(spec, pageable), UserDto::from);
     }
 
     @Transactional

@@ -2,12 +2,18 @@ import axios from 'axios';
 import { tokenStore } from '../auth/token';
 import type {
   Connection, ConnectionRequest, TestResult,
-  Project, ProjectRequest, Job, JobTableStatus, TableInfo, ColumnInfo, ColumnMapping, ProjectHealth,
+  Project, ProjectRequest, ProjectStatus, Job, JobTableStatus, TableInfo, ColumnInfo, ColumnMapping, ProjectHealth,
   ReconciliationRun, LoginResponse, MeResponse, UserAdmin, RoleName, AlertItem, ConstraintApplyResult,
   Schedule, ScheduleRequest, OrchestratorStatus, AuditPage, EngineSpec, CdcReadiness,
   MigrationPlan, SchemaObjectInventory, DryRunReport, CostEstimate,
-  ValidationReport, Recommendation, PluginInfo, TableProfile,
+  ValidationReport, Recommendation, PluginInfo, TableProfile, Page, DbType,
 } from './types';
+
+// Drop undefined/empty params so optional filters don't hit the wire as "?q=".
+const clean = (p: object): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== ''));
+
+export interface PageQuery { page?: number; size?: number; q?: string; }
 
 const http = axios.create({ baseURL: '/api/v1' });
 
@@ -39,7 +45,11 @@ export const authApi = {
 };
 
 export const connectionsApi = {
-  list: () => http.get<Connection[]>('/connections').then((r) => r.data),
+  // Full list (large page) for dropdowns/dashboards that need every connection.
+  list: () => http.get<Page<Connection>>('/connections', { params: { size: 1000 } }).then((r) => r.data.content),
+  // Paged + filterable list for the Connections table (#127).
+  page: (p: PageQuery & { dbType?: DbType }) =>
+    http.get<Page<Connection>>('/connections', { params: clean(p) }).then((r) => r.data),
   engines: () => http.get<EngineSpec[]>('/connections/engines').then((r) => r.data),
   cdcReadiness: (id: string) => http.get<CdcReadiness>(`/connections/${id}/cdc-readiness`).then((r) => r.data),
   schemaObjects: (id: string) => http.get<SchemaObjectInventory>(`/connections/${id}/schema-objects`).then((r) => r.data),
@@ -54,7 +64,9 @@ export const connectionsApi = {
 };
 
 export const usersApi = {
-  list: () => http.get<UserAdmin[]>('/users').then((r) => r.data),
+  list: () => http.get<Page<UserAdmin>>('/users', { params: { size: 1000 } }).then((r) => r.data.content),
+  page: (p: PageQuery & { role?: RoleName; enabled?: boolean }) =>
+    http.get<Page<UserAdmin>>('/users', { params: clean(p) }).then((r) => r.data),
   create: (body: { username: string; password: string; role: RoleName }) =>
     http.post<UserAdmin>('/users', body).then((r) => r.data),
   update: (id: string, body: { role?: RoleName; enabled?: boolean; password?: string }) =>
@@ -109,7 +121,9 @@ export const schemaApi = {
 };
 
 export const projectsApi = {
-  list: () => http.get<Project[]>('/projects').then((r) => r.data),
+  list: () => http.get<Page<Project>>('/projects', { params: { size: 1000 } }).then((r) => r.data.content),
+  page: (p: PageQuery & { status?: ProjectStatus }) =>
+    http.get<Page<Project>>('/projects', { params: clean(p) }).then((r) => r.data),
   create: (body: ProjectRequest) => http.post<Project>('/projects', body).then((r) => r.data),
   update: (id: string, body: ProjectRequest) =>
     http.put<Project>(`/projects/${id}`, body).then((r) => r.data),
@@ -162,6 +176,6 @@ export const orchestratorApi = {
 };
 
 export const auditApi = {
-  list: (page = 0, size = 50) =>
-    http.get<AuditPage>('/audit', { params: { page, size } }).then((r) => r.data),
+  list: (page = 0, size = 50, filters: { actor?: string; action?: string } = {}) =>
+    http.get<AuditPage>('/audit', { params: clean({ page, size, ...filters }) }).then((r) => r.data),
 };

@@ -32,10 +32,11 @@ function installApiMock(routeFn: (handler: (route: Route) => Promise<void>) => P
       return json({ maxConcurrent: 2, running: 0, queued: 0, runningTasks: [], queuedTasks: [] });
     }
     if (path === '/connections') {
-      return json([
+      const content = [
         { id: 'src', name: 'MSSQL', dbType: 'SQLSERVER', host: 'mssql', port: 1433, databaseName: 'app', username: 'sa', options: {}, createdAt: '', updatedAt: '' },
         { id: 'tgt', name: 'PG', dbType: 'POSTGRESQL', host: 'pg', port: 5432, databaseName: 'app', username: 'pg', options: {}, createdAt: '', updatedAt: '' },
-      ]);
+      ];
+      return json({ content, page: 0, size: content.length, total: content.length });
     }
     if (method === 'POST' && path === '/projects') {
       const body = req.postDataJSON() as { name: string; description?: string };
@@ -46,7 +47,9 @@ function installApiMock(routeFn: (handler: (route: Route) => Promise<void>) => P
       projects.push(project);
       return json(project, 201);
     }
-    if (method === 'GET' && path === '/projects') return json(projects);
+    if (method === 'GET' && path === '/projects') {
+      return json({ content: projects, page: 0, size: 20, total: projects.length });
+    }
     if (method === 'POST' && path === `/projects/${PROJECT_ID}/dry-run`) {
       return json({
         ok: true,

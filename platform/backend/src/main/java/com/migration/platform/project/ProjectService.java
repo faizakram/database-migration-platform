@@ -2,14 +2,21 @@ package com.migration.platform.project;
 
 import com.migration.platform.audit.AuditService;
 import com.migration.platform.common.NotFoundException;
+import com.migration.platform.common.PageResponse;
 import com.migration.platform.connection.ConnectionRepository;
 import com.migration.platform.connection.DbConnection;
 import com.migration.platform.connection.EngineCatalog;
 import com.migration.platform.project.dto.ProjectRequest;
 import com.migration.platform.project.dto.ProjectResponse;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +48,25 @@ public class ProjectService {
     @Transactional(readOnly = true)
     public List<ProjectResponse> list() {
         return repo.findAll().stream().map(ProjectResponse::from).toList();
+    }
+
+    /** Paged + filterable project list (#127). {@code q} matches name/description, {@code status} is exact. */
+    @Transactional(readOnly = true)
+    public PageResponse<ProjectResponse> listPage(int page, int size, String q, ProjectStatus status) {
+        Specification<MigrationProject> spec = (root, query, cb) -> {
+            List<Predicate> ps = new ArrayList<>();
+            if (q != null && !q.isBlank()) {
+                String like = "%" + q.toLowerCase() + "%";
+                ps.add(cb.or(
+                        cb.like(cb.lower(root.get("name")), like),
+                        cb.like(cb.lower(cb.coalesce(root.get("description"), "")), like)));
+            }
+            if (status != null) ps.add(cb.equal(root.get("status"), status));
+            return cb.and(ps.toArray(new Predicate[0]));
+        };
+        Pageable pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 200),
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+        return PageResponse.of(repo.findAll(spec, pageable), ProjectResponse::from);
     }
 
     @Transactional(readOnly = true)
