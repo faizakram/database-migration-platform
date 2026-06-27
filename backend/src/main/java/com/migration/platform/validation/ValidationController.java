@@ -32,12 +32,13 @@ public class ValidationController {
     @GetMapping(value = "/report.csv", produces = "text/csv")
     public ResponseEntity<byte[]> csv(@PathVariable UUID projectId) {
         ValidationReport r = service.validate(projectId);
-        StringBuilder sb = new StringBuilder("schema,table,source_rows,target_rows,null_pk,duplicate_keys,missing,extra,status,issues\n");
+        StringBuilder sb = new StringBuilder("schema,table,source_rows,target_rows,null_pk,duplicate_keys,missing,extra,cdc_inserts,cdc_updates,cdc_deletes,status,issues\n");
         for (TableValidation t : r.results()) {
             sb.append(t.schema()).append(',').append(t.table()).append(',')
               .append(t.sourceRows()).append(',').append(t.targetRows()).append(',')
               .append(t.nullPrimaryKey()).append(',').append(t.duplicateKeys()).append(',')
               .append(t.missingRows()).append(',').append(t.extraRows()).append(',')
+              .append(t.cdcInserts()).append(',').append(t.cdcUpdates()).append(',').append(t.cdcDeletes()).append(',')
               .append(t.status()).append(',').append('"').append(String.join("; ", t.issues())).append('"').append('\n');
         }
         return ResponseEntity.ok()

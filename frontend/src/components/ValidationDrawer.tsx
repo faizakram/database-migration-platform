@@ -12,6 +12,10 @@ const RESULT_COLOR: Record<string, string> = {
   MATCH: 'green', MISMATCH: 'red', ERROR: 'orange', SKIPPED: 'default',
 };
 const num = (v: number) => (v > 0 ? <span style={{ color: '#cf1322' }}>{v.toLocaleString()}</span> : v.toLocaleString());
+// CDC op counts: -1 means N/A (source engine exposes no change log / CDC not enabled). Colour by op type.
+const cdcNum = (color: string) => (v: number) =>
+  (v == null || v < 0 ? <Typography.Text type="secondary">—</Typography.Text>
+    : <span style={{ color: v > 0 ? color : undefined }}>{v.toLocaleString()}</span>);
 
 export default function ValidationDrawer({ project, onClose }: { project: Project | null; onClose: () => void }) {
   const { message } = App.useApp();
@@ -277,6 +281,18 @@ export default function ValidationDrawer({ project, onClose }: { project: Projec
                         { title: 'Dup keys', dataIndex: 'duplicateKeys', render: num },
                         { title: 'Missing', dataIndex: 'missingRows', render: num },
                         { title: 'Extra', dataIndex: 'extraRows', render: num },
+                        {
+                          title: <Tooltip title="Source CDC change activity (inserts captured)">Inserts</Tooltip>,
+                          dataIndex: 'cdcInserts', render: cdcNum('#3f8600'),
+                        },
+                        {
+                          title: <Tooltip title="Source CDC change activity (updates captured)">Updates</Tooltip>,
+                          dataIndex: 'cdcUpdates', render: cdcNum('#1677ff'),
+                        },
+                        {
+                          title: <Tooltip title="Source CDC change activity (deletes captured)">Deletes</Tooltip>,
+                          dataIndex: 'cdcDeletes', render: cdcNum('#cf1322'),
+                        },
                         {
                           title: 'Status', dataIndex: 'status',
                           render: (s: string) => <Tag color={s === 'PASS' ? 'green' : s === 'FAIL' ? 'red' : 'default'}>{s}</Tag>,

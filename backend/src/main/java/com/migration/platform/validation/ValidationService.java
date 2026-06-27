@@ -100,9 +100,52 @@ public class ValidationService {
                 missing = missingSample(sc, tc, srcEngine, schema, table, pk, tgtTable, tgtPk);
             }
             long extra = Math.max(0, targetRows - sourceRows);
-            return ValidationLogic.assess(schema, table, sourceRows, targetRows, nullPk, dupKeys, missing, extra);
+            long[] ops = cdcOpCounts(sc, srcEngine, schema, table);
+            return ValidationLogic.assess(schema, table, sourceRows, targetRows, nullPk, dupKeys, missing, extra,
+                    ops[0], ops[1], ops[2]);
         } catch (Exception e) {
-            return new TableValidation(schema, table, -1, -1, 0, 0, 0, 0, "ERROR", List.of(e.getMessage()));
+            return new TableValidation(schema, table, -1, -1, 0, 0, 0, 0, -1, -1, -1, "ERROR", List.of(e.getMessage()));
+        }
+    }
+
+    /**
+     * Best-effort per-table CDC change activity from the source, for user visibility (not a PASS/FAIL signal).
+     * Returns {inserts, updates, deletes}; {-1,-1,-1} when the engine/table exposes no change log.
+     * SQL Server keeps these in the CDC change tables: {@code cdc.<capture_instance>_CT}, where
+     * {@code __$operation} is 2=insert, 4=update (after image), 1=delete (3=update before image, ignored).
+     */
+    private long[] cdcOpCounts(Connection sc, DbType srcEngine, String schema, String table) {
+        if (srcEngine != DbType.SQLSERVER) return new long[]{-1, -1, -1};
+        try {
+            String captureInstance = null;
+            String find = "SELECT ct.capture_instance FROM cdc.change_tables ct "
+                    + "JOIN sys.tables t ON ct.source_object_id = t.object_id "
+                    + "JOIN sys.schemas s ON t.schema_id = s.schema_id "
+                    + "WHERE s.name = '" + schema.replace("'", "''") + "' "
+                    + "AND t.name = '" + table.replace("'", "''") + "'";
+            try (Statement st = sc.createStatement(); ResultSet rs = st.executeQuery(find)) {
+                if (rs.next()) captureInstance = rs.getString(1);
+            }
+            if (captureInstance == null) return new long[]{-1, -1, -1};
+
+            long inserts = 0, updates = 0, deletes = 0;
+            String ct = "[cdc].[" + captureInstance.replace("]", "]]") + "_CT]";
+            String q = "SELECT [__$operation], COUNT_BIG(*) FROM " + ct + " GROUP BY [__$operation]";
+            try (Statement st = sc.createStatement(); ResultSet rs = st.executeQuery(q)) {
+                while (rs.next()) {
+                    int op = rs.getInt(1);
+                    long n = rs.getLong(2);
+                    switch (op) {
+                        case 2 -> inserts = n;
+                        case 4 -> updates = n;
+                        case 1 -> deletes = n;
+                        default -> { /* 3 = update before-image, ignore */ }
+                    }
+                }
+            }
+            return new long[]{inserts, updates, deletes};
+        } catch (Exception e) {
+            return new long[]{-1, -1, -1};   // CDC not enabled / no permission — non-fatal
         }
     }
 

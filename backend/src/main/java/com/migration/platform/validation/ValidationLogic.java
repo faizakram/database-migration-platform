@@ -16,7 +16,8 @@ public final class ValidationLogic {
     public static TableValidation assess(String schema, String table,
                                          long sourceRows, long targetRows,
                                          long nullPk, long duplicateKeys,
-                                         long missing, long extra) {
+                                         long missing, long extra,
+                                         long cdcInserts, long cdcUpdates, long cdcDeletes) {
         List<String> issues = new ArrayList<>();
         if (sourceRows != targetRows) issues.add("ROW_COUNT_MISMATCH(" + sourceRows + " vs " + targetRows + ")");
         if (nullPk > 0) issues.add("NULL_PRIMARY_KEY(" + nullPk + ")");
@@ -24,7 +25,8 @@ public final class ValidationLogic {
         if (missing > 0) issues.add("MISSING_ROWS(" + missing + ")");
         if (extra > 0) issues.add("EXTRA_ROWS(" + extra + ")");
         String status = issues.isEmpty() ? "PASS" : "FAIL";
+        // CDC op counts are informational visibility only — they don't affect PASS/FAIL.
         return new TableValidation(schema, table, sourceRows, targetRows, nullPk, duplicateKeys,
-                missing, extra, status, issues);
+                missing, extra, cdcInserts, cdcUpdates, cdcDeletes, status, issues);
     }
 }
