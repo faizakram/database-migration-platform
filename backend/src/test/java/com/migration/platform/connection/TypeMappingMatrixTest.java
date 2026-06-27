@@ -55,6 +55,11 @@ class TypeMappingMatrixTest {
         // MySQL appends " unsigned" / " zerofill" — also base types, not unmappable.
         assertThat(TypeMappingMatrix.map(DbType.MYSQL, DbType.POSTGRESQL, "int unsigned", 0).note()).isNull();
 
+        // SQL Server rowversion/timestamp is an 8-byte version value -> BYTEA, cleanly.
+        TypeMappingMatrix.Mapped rv = TypeMappingMatrix.map(DbType.SQLSERVER, DbType.POSTGRESQL, "timestamp", 0);
+        assertThat(rv.targetType()).isEqualTo("BYTEA");
+        assertThat(rv.note()).isNull();
+
         // A genuinely unsupported type is still flagged (e.g. SQL Server geography).
         assertThat(TypeMappingMatrix.map(DbType.SQLSERVER, DbType.POSTGRESQL, "geography", 0).note())
                 .contains("No canonical mapping");

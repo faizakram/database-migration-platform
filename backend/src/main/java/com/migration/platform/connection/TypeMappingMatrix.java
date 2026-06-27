@@ -61,7 +61,8 @@ public final class TypeMappingMatrix {
                 case "time" -> Cat.TIME;
                 case "datetime", "datetime2", "smalldatetime" -> Cat.TIMESTAMP;
                 case "datetimeoffset" -> Cat.TIMESTAMPTZ;
-                case "binary", "varbinary", "image" -> Cat.BINARY;
+                // rowversion (a.k.a. timestamp) is an 8-byte auto-version value, not a datetime.
+                case "binary", "varbinary", "image", "rowversion", "timestamp" -> Cat.BINARY;
                 case "uniqueidentifier" -> Cat.UUID;
                 default -> Cat.UNKNOWN;
             };
