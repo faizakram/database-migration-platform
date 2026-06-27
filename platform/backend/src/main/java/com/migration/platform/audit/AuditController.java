@@ -34,8 +34,10 @@ public class AuditController {
 
     @GetMapping
     public AuditPage list(@RequestParam(defaultValue = "0") int page,
-                          @RequestParam(defaultValue = "50") int size) {
-        Page<AuditLog> p = service.list(page, size);
+                          @RequestParam(defaultValue = "50") int size,
+                          @RequestParam(required = false) String actor,
+                          @RequestParam(required = false) String action) {
+        Page<AuditLog> p = service.list(page, size, actor, action);
         return new AuditPage(p.getContent().stream().map(AuditEntry::from).toList(),
                 p.getNumber(), p.getSize(), p.getTotalElements());
     }

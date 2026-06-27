@@ -57,7 +57,14 @@ export default function Projects() {
   const [objectsFor, setObjectsFor] = useState<Project | null>(null);
   const [form] = Form.useForm<FormValues>();
 
-  const { data, isLoading } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list });
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(0);
+  const [q, setQ] = useState<string | undefined>(undefined);
+  const [status, setStatus] = useState<ProjectStatus | undefined>(undefined);
+  const { data, isLoading } = useQuery({
+    queryKey: ['projects', 'page', page, q, status],
+    queryFn: () => projectsApi.page({ page, size: PAGE_SIZE, q, status }),
+  });
   const connections = useQuery({ queryKey: ['connections'], queryFn: connectionsApi.list });
 
   const create = useMutation({
@@ -179,11 +186,24 @@ export default function Projects() {
         </Button>
       }
     >
-      <Table rowKey="id" loading={isLoading} dataSource={data} columns={columns} pagination={false}
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input.Search allowClear placeholder="Search name / description" style={{ width: 300 }}
+          onSearch={(v) => { setQ(v || undefined); setPage(0); }}
+          onChange={(e) => { if (!e.target.value) { setQ(undefined); setPage(0); } }} />
+        <Select allowClear placeholder="All statuses" style={{ width: 160 }} value={status}
+          onChange={(v) => { setStatus(v); setPage(0); }}
+          options={(['DRAFT', 'READY', 'ACTIVE', 'ARCHIVED'] as ProjectStatus[]).map((s) => ({ value: s, label: s }))} />
+      </Space>
+      <Table rowKey="id" loading={isLoading} dataSource={data?.content} columns={columns}
+        pagination={{
+          current: page + 1, pageSize: PAGE_SIZE, total: data?.total ?? 0,
+          showSizeChanger: false, hideOnSinglePage: true, onChange: (p) => setPage(p - 1),
+        }}
         scroll={{ x: 'max-content' }}
         locale={{ emptyText: !isLoading && (
-          <EmptyState icon={<ProjectOutlined />} title="No projects yet"
-            description="Create a project to link a source and target connection, then run a migration." />
+          <EmptyState icon={<ProjectOutlined />} title={q || status ? 'No matches' : 'No projects yet'}
+            description={q || status ? 'Try a different search or filter.'
+              : 'Create a project to link a source and target connection, then run a migration.'} />
         ) }} />
 
       <Modal

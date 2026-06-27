@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Table, Tag, Typography, Tooltip } from 'antd';
+import { Card, Table, Tag, Typography, Tooltip, Input, Space } from 'antd';
 import { FileSearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { auditApi } from '../api/client';
@@ -17,16 +17,26 @@ const ACTION_COLOR: Record<string, string> = {
 /** Admin-only audit log of control + config actions (#57). */
 export default function Audit() {
   const [page, setPage] = useState(0);
+  const [actor, setActor] = useState<string | undefined>(undefined);
+  const [action, setAction] = useState<string | undefined>(undefined);
   const size = 50;
   const q = useQuery({
-    queryKey: ['audit', page],
-    queryFn: () => auditApi.list(page, size),
+    queryKey: ['audit', page, actor, action],
+    queryFn: () => auditApi.list(page, size, { actor, action }),
     refetchInterval: 10000,
   });
 
   return (
     <Card title="Audit log" size="small"
       extra={<Typography.Text type="secondary">Who did what — control & config actions</Typography.Text>}>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input.Search allowClear placeholder="Filter by actor (exact)" style={{ width: 220 }}
+          onSearch={(v) => { setActor(v || undefined); setPage(0); }}
+          onChange={(e) => { if (!e.target.value) { setActor(undefined); setPage(0); } }} />
+        <Input.Search allowClear placeholder="Filter by action (contains)" style={{ width: 240 }}
+          onSearch={(v) => { setAction(v || undefined); setPage(0); }}
+          onChange={(e) => { if (!e.target.value) { setAction(undefined); setPage(0); } }} />
+      </Space>
       <Table<AuditEntry>
         rowKey="id"
         size="small"

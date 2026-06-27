@@ -1,5 +1,6 @@
 package com.migration.platform.connection;
 
+import com.migration.platform.common.PageResponse;
 import com.migration.platform.connection.dto.ConnectionRequest;
 import com.migration.platform.connection.dto.ConnectionResponse;
 import com.migration.platform.connection.dto.TestResult;
@@ -27,8 +28,12 @@ public class ConnectionController {
     }
 
     @GetMapping
-    public List<ConnectionResponse> list() {
-        return service.list();
+    public PageResponse<ConnectionResponse> list(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) DbType dbType) {
+        return service.listPage(page, size, q, dbType);
     }
 
     /** The supported-engine catalog that drives the connection form + pair validation (#76/#82). */

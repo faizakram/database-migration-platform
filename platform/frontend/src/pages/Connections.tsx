@@ -44,7 +44,15 @@ export default function Connections() {
   const [form] = Form.useForm<ConnForm>();
   const dbType = Form.useWatch('dbType', form);
 
-  const { data, isLoading } = useQuery({ queryKey: ['connections'], queryFn: connectionsApi.list });
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(0);
+  const [q, setQ] = useState<string | undefined>(undefined);
+  const [engine, setEngine] = useState<DbType | undefined>(undefined);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['connections', 'page', page, q, engine],
+    queryFn: () => connectionsApi.page({ page, size: PAGE_SIZE, q, dbType: engine }),
+  });
   const engines = useQuery({ queryKey: ['engines'], queryFn: connectionsApi.engines });
   const portByEngine = (t: DbType): number =>
     engines.data?.find((e) => e.type === t)?.defaultPort ?? 1433;
@@ -153,16 +161,28 @@ export default function Connections() {
         </Button>
       }
     >
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input.Search allowClear placeholder="Search name / host / database / user" style={{ width: 320 }}
+          onSearch={(v) => { setQ(v || undefined); setPage(0); }}
+          onChange={(e) => { if (!e.target.value) { setQ(undefined); setPage(0); } }} />
+        <Select allowClear placeholder="All engines" style={{ width: 180 }} value={engine}
+          onChange={(v) => { setEngine(v); setPage(0); }}
+          options={(engines.data ?? []).map((e) => ({ value: e.type, label: e.displayName }))} />
+      </Space>
       <Table
         rowKey="id"
         loading={isLoading}
-        dataSource={data}
+        dataSource={data?.content}
         columns={columns}
-        pagination={false}
+        pagination={{
+          current: page + 1, pageSize: PAGE_SIZE, total: data?.total ?? 0,
+          showSizeChanger: false, hideOnSinglePage: true, onChange: (p) => setPage(p - 1),
+        }}
         scroll={{ x: 'max-content' }}
         locale={{ emptyText: !isLoading && (
-          <EmptyState icon={<DatabaseOutlined />} title="No connections yet"
-            description="Add a source (SQL Server) and target (PostgreSQL) connection to get started." />
+          <EmptyState icon={<DatabaseOutlined />} title={q || engine ? 'No matches' : 'No connections yet'}
+            description={q || engine ? 'Try a different search or filter.'
+              : 'Add a source (SQL Server) and target (PostgreSQL) connection to get started.'} />
         ) }}
       />
 

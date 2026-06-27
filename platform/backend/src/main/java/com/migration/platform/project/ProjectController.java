@@ -1,5 +1,6 @@
 package com.migration.platform.project;
 
+import com.migration.platform.common.PageResponse;
 import com.migration.platform.project.dto.ProjectRequest;
 import com.migration.platform.project.dto.ProjectResponse;
 import jakarta.validation.Valid;
@@ -7,7 +8,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -21,8 +21,12 @@ public class ProjectController {
     }
 
     @GetMapping
-    public List<ProjectResponse> list() {
-        return service.list();
+    public PageResponse<ProjectResponse> list(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) ProjectStatus status) {
+        return service.listPage(page, size, q, status);
     }
 
     @GetMapping("/{id}")

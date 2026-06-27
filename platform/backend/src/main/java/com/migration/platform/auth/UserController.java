@@ -3,13 +3,13 @@ package com.migration.platform.auth;
 import com.migration.platform.auth.dto.UserDtos.CreateUserRequest;
 import com.migration.platform.auth.dto.UserDtos.UpdateUserRequest;
 import com.migration.platform.auth.dto.UserDtos.UserDto;
+import com.migration.platform.common.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.UUID;
 
 /** User administration — ADMIN only (enforced in SecurityConfig, #56). */
@@ -24,8 +24,13 @@ public class UserController {
     }
 
     @GetMapping
-    public List<UserDto> list() {
-        return service.list();
+    public PageResponse<UserDto> list(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) Role role,
+            @RequestParam(required = false) Boolean enabled) {
+        return service.listPage(page, size, q, role, enabled);
     }
 
     @PostMapping

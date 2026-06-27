@@ -21,7 +21,14 @@ export default function Users() {
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<{ username: string; password: string; role: RoleName }>();
 
-  const { data, isLoading } = useQuery({ queryKey: ['users'], queryFn: usersApi.list });
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(0);
+  const [q, setQ] = useState<string | undefined>(undefined);
+  const [role, setRole] = useState<RoleName | undefined>(undefined);
+  const { data, isLoading } = useQuery({
+    queryKey: ['users', 'page', page, q, role],
+    queryFn: () => usersApi.page({ page, size: PAGE_SIZE, q, role }),
+  });
   const invalidate = () => qc.invalidateQueries({ queryKey: ['users'] });
   const onErr = (e: any) => message.error(e?.response?.data?.message ?? 'Action failed');
 
@@ -78,8 +85,20 @@ export default function Users() {
       title="Users & roles"
       extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>New user</Button>}
     >
-      <Table rowKey="id" loading={isLoading} dataSource={data}
-        columns={columns} pagination={false} scroll={{ x: 'max-content' }}
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input.Search allowClear placeholder="Search username" style={{ width: 260 }}
+          onSearch={(v) => { setQ(v || undefined); setPage(0); }}
+          onChange={(e) => { if (!e.target.value) { setQ(undefined); setPage(0); } }} />
+        <Select allowClear placeholder="All roles" style={{ width: 160 }} value={role}
+          onChange={(v) => { setRole(v as RoleName); setPage(0); }}
+          options={ROLE_OPTS.map((o) => ({ value: o.value, label: o.value }))} />
+      </Space>
+      <Table rowKey="id" loading={isLoading} dataSource={data?.content}
+        columns={columns} scroll={{ x: 'max-content' }}
+        pagination={{
+          current: page + 1, pageSize: PAGE_SIZE, total: data?.total ?? 0,
+          showSizeChanger: false, hideOnSinglePage: true, onChange: (p) => setPage(p - 1),
+        }}
         rowClassName={(r) => (r.enabled ? '' : 'ant-table-row-disabled')} />
 
       <Modal title="New user" open={open} onCancel={() => setOpen(false)}

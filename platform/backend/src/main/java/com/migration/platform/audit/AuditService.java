@@ -1,15 +1,20 @@
 package com.migration.platform.audit;
 
+import jakarta.persistence.criteria.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -62,7 +67,22 @@ public class AuditService {
     }
 
     public Page<AuditLog> list(int page, int size) {
-        return repo.findAllByOrderByCreatedAtDesc(PageRequest.of(page, Math.min(size, 200)));
+        return list(page, size, null, null);
+    }
+
+    /** Paged audit log with optional actor (exact) and action (contains) filters (#127). */
+    public Page<AuditLog> list(int page, int size, String actor, String action) {
+        Specification<AuditLog> spec = (root, query, cb) -> {
+            List<Predicate> ps = new ArrayList<>();
+            if (actor != null && !actor.isBlank()) ps.add(cb.equal(root.get("actor"), actor));
+            if (action != null && !action.isBlank()) {
+                ps.add(cb.like(cb.lower(root.get("action")), "%" + action.toLowerCase() + "%"));
+            }
+            return cb.and(ps.toArray(new Predicate[0]));
+        };
+        PageRequest pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 200),
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+        return repo.findAll(spec, pageable);
     }
 
     private String currentActor() {
