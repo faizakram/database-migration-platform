@@ -1,8 +1,9 @@
 # --- build stage ---
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY package.json ./
-RUN npm install
+# Install from the lockfile for reproducible builds; this layer caches until deps change.
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
 
