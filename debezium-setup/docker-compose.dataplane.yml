@@ -33,6 +33,14 @@ services:
       CONFIG_STORAGE_REPLICATION_FACTOR: "1"
       OFFSET_STORAGE_REPLICATION_FACTOR: "1"
       STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      # Cut the ~5-min cold-start before a new sink begins writing (#130). Two defaults dominate it:
+      #  - scheduled.rebalance.max.delay.ms (300000): under incremental cooperative rebalancing the
+      #    worker delays assigning a newly-created connector's tasks, waiting for absent workers to
+      #    return. Single-worker dev has none to wait for, so 0 = assign immediately.
+      #  - consumer metadata.max.age.ms (300000): how long before the sink consumer refreshes topic
+      #    metadata and discovers the brand-new source topics. 5s makes pickup near-instant.
+      CONNECT_SCHEDULED_REBALANCE_MAX_DELAY_MS: "0"
+      CONNECT_CONSUMER_METADATA_MAX_AGE_MS: "5000"
 
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
