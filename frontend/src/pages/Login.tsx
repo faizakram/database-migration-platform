@@ -53,7 +53,13 @@ export default function Login() {
           </div>
         </div>
 
-        <div className="auth-foot">© {new Date().getFullYear()} CDC Console · Secure migration control plane</div>
+        <div className="auth-foot">
+          © {new Date().getFullYear()} CDC Console · Developed by{' '}
+          <a href="https://www.esparksit.com/" target="_blank" rel="noopener noreferrer"
+            style={{ color: 'inherit', fontWeight: 600 }}>
+            ESPARKS IT Solutions
+          </a>
+        </div>
       </aside>
 
       <main className="auth-form-side">

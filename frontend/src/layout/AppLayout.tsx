@@ -166,6 +166,16 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </div>
           </div>
           <div key={location.pathname} className="page-enter">{children}</div>
+          <footer className="app-footer" style={{
+            marginTop: 32, paddingTop: 16, borderTop: '1px solid var(--border, rgba(0,0,0,0.06))',
+            textAlign: 'center', fontSize: 12, color: 'var(--muted, #8c8c8c)',
+          }}>
+            © {new Date().getFullYear()} Universal Database Migration Platform · Developed by{' '}
+            <a href="https://www.esparksit.com/" target="_blank" rel="noopener noreferrer"
+              style={{ fontWeight: 600, color: 'var(--accent, #4F46E5)', textDecoration: 'none' }}>
+              ESPARKS IT Solutions
+            </a>
+          </footer>
         </Content>
       </Layout>
     </Layout>
