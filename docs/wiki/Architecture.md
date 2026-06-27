@@ -4,7 +4,7 @@ The platform is split into a **control plane** (what you operate) and a **data p
 
 ## High-level components
 
-<img width="1536" height="1024" alt="a20ac728-876e-4920-9588-8a88332170ed" src="https://github.com/user-attachments/assets/e7b18dfe-3cef-4c56-b2b3-97642e807eb2" />
+<img width="900" height="500" alt="a20ac728-876e-4920-9588-8a88332170ed" src="https://github.com/user-attachments/assets/e7b18dfe-3cef-4c56-b2b3-97642e807eb2" />
 
 ## Backend package map
 
