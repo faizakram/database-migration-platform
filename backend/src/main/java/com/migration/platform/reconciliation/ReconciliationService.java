@@ -4,9 +4,12 @@ import com.migration.platform.common.CryptoService;
 import com.migration.platform.common.NotFoundException;
 import com.migration.platform.connection.ConnectionRepository;
 import com.migration.platform.connection.DbConnection;
+import com.migration.platform.connection.DbType;
 import com.migration.platform.connection.JdbcSupport;
 import com.migration.platform.connector.DeleteStrategy;
 import com.migration.platform.connector.MigrationConfig;
+import com.migration.platform.connector.NamingStrategy;
+import com.migration.platform.connector.TargetNaming;
 import com.migration.platform.project.MigrationProject;
 import com.migration.platform.project.ProjectRepository;
 import com.migration.platform.reconciliation.dto.ReconciliationDtos.RunDto;
@@ -96,8 +99,8 @@ public class ReconciliationService {
                 String schema = parts.length == 2 ? parts[0] : "dbo";
                 String tableName = parts.length == 2 ? parts[1] : parts[0];
                 ReconciliationResult r = checksum
-                        ? reconcileChecksum(sc, tc, schema, tableName, mc.targetSchema(), softDelete, sampleSize)
-                        : reconcileCount(sc, tc, schema, tableName, mc.targetSchema(), softDelete);
+                        ? reconcileChecksum(sc, tc, tgt.getDbType(), schema, tableName, mc.targetSchema(), mc.namingStrategy(), softDelete, sampleSize)
+                        : reconcileCount(sc, tc, tgt.getDbType(), schema, tableName, mc.targetSchema(), mc.namingStrategy(), softDelete);
                 r.setRunId(run.getId());
                 resultRepo.save(r);
                 if ("MISMATCH".equals(r.getStatus())) mismatched++;
@@ -114,13 +117,13 @@ public class ReconciliationService {
         return RunDto.from(run, resultRepo.findByRunIdOrderByTableName(run.getId()));
     }
 
-    private ReconciliationResult reconcileCount(Connection sc, Connection tc, String schema, String table,
-                                                String targetSchema, boolean softDelete) {
+    private ReconciliationResult reconcileCount(Connection sc, Connection tc, DbType tgtEngine, String schema, String table,
+                                                String targetSchema, NamingStrategy naming, boolean softDelete) {
         ReconciliationResult r = newResult(schema, table);
         try {
             long source = count(sc, "SELECT COUNT(*) FROM [" + schema + "].[" + table + "]");
-            String targetSql = "SELECT COUNT(*) FROM " + targetSchema + "." + ReconciliationLogic.snakeCase(table)
-                    + (softDelete ? " WHERE __cdc_deleted IS NOT TRUE" : "");
+            String targetSql = "SELECT COUNT(*) FROM " + qid(tgtEngine, targetSchema) + "." + qid(tgtEngine, TargetNaming.apply(table, naming))
+                    + (softDelete ? " WHERE " + qid(tgtEngine, TargetNaming.apply("__cdc_deleted", naming)) + " IS NOT TRUE" : "");
             long target = count(tc, targetSql);
             var outcome = ReconciliationLogic.countOutcome(source, target);
             r.setSourceCount(source);
@@ -134,8 +137,8 @@ public class ReconciliationService {
         return r;
     }
 
-    private ReconciliationResult reconcileChecksum(Connection sc, Connection tc, String schema, String table,
-                                                   String targetSchema, boolean softDelete, int sampleSize) {
+    private ReconciliationResult reconcileChecksum(Connection sc, Connection tc, DbType tgtEngine, String schema, String table,
+                                                   String targetSchema, NamingStrategy naming, boolean softDelete, int sampleSize) {
         ReconciliationResult r = newResult(schema, table);
         try {
             Optional<String> pkOpt = singlePrimaryKey(sc, schema, table);
@@ -165,13 +168,14 @@ public class ReconciliationService {
             Set<String> sample = srcRows.keySet();
 
             // Fetch the matching target rows (PK cast to lower text to bridge the type conversion).
-            String tgtPk = ReconciliationLogic.snakeCase(pk);
+            String tgtPk = TargetNaming.apply(pk, naming);          // plain name for ResultSet lookup
+            String tgtPkSql = qid(tgtEngine, tgtPk);                 // quoted for SQL (case-sensitive names)
             Map<String, Map<String, Object>> tgtRows = new HashMap<>();
             Set<String> tgtCols = new HashSet<>();
             if (!sample.isEmpty()) {
-                String tgtSql = "SELECT * FROM " + targetSchema + "." + ReconciliationLogic.snakeCase(table)
-                        + " WHERE lower(cast(" + tgtPk + " AS text)) = ANY(?)"
-                        + (softDelete ? " AND __cdc_deleted IS NOT TRUE" : "");
+                String tgtSql = "SELECT * FROM " + qid(tgtEngine, targetSchema) + "." + qid(tgtEngine, TargetNaming.apply(table, naming))
+                        + " WHERE lower(cast(" + tgtPkSql + " AS text)) = ANY(?)"
+                        + (softDelete ? " AND " + qid(tgtEngine, TargetNaming.apply("__cdc_deleted", naming)) + " IS NOT TRUE" : "");
                 try (PreparedStatement ps = tc.prepareStatement(tgtSql)) {
                     ps.setArray(1, tc.createArrayOf("text", sample.toArray()));
                     try (ResultSet rs = ps.executeQuery()) {
@@ -188,10 +192,10 @@ public class ReconciliationService {
                 }
             }
 
-            // Compare non-PK source columns whose snake_case form exists on the target.
+            // Compare non-PK source columns whose target-named form exists on the target.
             List<String> compareCols = srcCols.stream()
                     .filter(c -> !c.equalsIgnoreCase(pk))
-                    .filter(c -> tgtCols.contains(ReconciliationLogic.snakeCase(c)))
+                    .filter(c -> tgtCols.contains(TargetNaming.apply(c, naming).toLowerCase()))
                     .sorted()
                     .toList();
 
@@ -204,7 +208,7 @@ public class ReconciliationService {
                         compareCols.stream().map(c -> ReconciliationLogic.normalizeValue(src.get(c))).toList());
                 String tgtHash = ReconciliationLogic.rowChecksum(
                         compareCols.stream()
-                                .map(c -> ReconciliationLogic.normalizeValue(tgt.get(ReconciliationLogic.snakeCase(c))))
+                                .map(c -> ReconciliationLogic.normalizeValue(tgt.get(TargetNaming.apply(c, naming).toLowerCase())))
                                 .toList());
                 if (!srcHash.equals(tgtHash)) changed++;
             }
@@ -232,6 +236,15 @@ public class ReconciliationService {
         try (Statement st = conn.createStatement(); ResultSet rs = st.executeQuery(sql)) {
             return rs.next() ? rs.getLong(1) : 0L;
         }
+    }
+
+    /** Quote a target identifier for the target engine so case-sensitive names (PascalCase) match. */
+    private String qid(DbType engine, String id) {
+        return switch (engine) {
+            case MYSQL -> "`" + id.replace("`", "``") + "`";
+            case SQLSERVER -> "[" + id.replace("]", "]]") + "]";
+            default -> "\"" + id.replace("\"", "\"\"") + "\"";   // PostgreSQL / Oracle / Db2
+        };
     }
 
     private ReconciliationResult newResult(String schema, String table) {
