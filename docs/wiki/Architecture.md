@@ -4,36 +4,7 @@ The platform is split into a **control plane** (what you operate) and a **data p
 
 ## High-level components
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ CONTROL PLANE                                                              │
-│                                                                            │
-│  React UI (:8081, nginx)                                                   │
-│     │ REST /api/v1/*  (JWT)                                                 │
-│     ▼                                                                       │
-│  Spring Boot backend (:8090)                                               │
-│   Controllers → Services → Repositories                                    │
-│     • ConnectionService / SchemaDiscoveryService / TypeMappingService      │
-│     • ProjectService                                                       │
-│     • JobService + ProgressTracker (scheduled)                             │
-│     • ConnectorConfigService (+ per-engine SourceConnectorStrategy)        │
-│     • ReconciliationService / ValidationService                            │
-│     • MonitoringService / LagService / PlatformMetrics                     │
-│     • ScheduleService / JobOrchestrator / AlertService / AuditService      │
-│     │                                  │                                    │
-│     │ JPA                              │ KafkaConnectClient (Connect REST)  │
-│     ▼                                  ▼                                    │
-│  Metadata Postgres (:5433)        Kafka Connect (:8083)  ────────────┐     │
-└───────────────────────────────────────────────────────────┼─────────┘     │
-                                                              ▼                │
-┌──────────────────────────────────────────────────────────────────────────┐│
-│ DATA PLANE                                                                 ││
-│  Debezium source connector ──▶ Kafka topics ──▶ Debezium JDBC sink         ││
-│        ▲ reads CDC log                                  │ upserts via JDBC  ││
-└────────┼────────────────────────────────────────────────┼─────────────────┘│
-         │                                                  ▼                  │
-   SOURCE database                                    TARGET database          │
-```
+<img width="1536" height="1024" alt="a20ac728-876e-4920-9588-8a88332170ed" src="https://github.com/user-attachments/assets/e7b18dfe-3cef-4c56-b2b3-97642e807eb2" />
 
 ## Backend package map
 
