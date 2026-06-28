@@ -78,6 +78,14 @@ export default function SchemaDrawer({ project, onClose }: { project: Project | 
   const selectedCdcOff = isSqlServerSource
     && selected.some((k) => tables.data?.find((t) => keyOf(t) === k && !t.cdcEnabled));
 
+  // Bulk selection across ALL tables (not just the current page) — essential with 300+ tables where
+  // paging through to tick boxes is impractical. CDC enabled/off is a SQL Server concept; for other
+  // engines every table reports cdc=off, so only "All"/"Clear" are meaningful there.
+  const allTables = tables.data ?? [];
+  const allKeys = allTables.map(keyOf);
+  const cdcKeys = allTables.filter((t) => t.cdcEnabled).map(keyOf);
+  const nonCdcKeys = allTables.filter((t) => !t.cdcEnabled).map(keyOf);
+
   const save = useMutation({
     mutationFn: () => projectsApi.update(project!.id, {
       name: project!.name,
@@ -155,15 +163,29 @@ export default function SchemaDrawer({ project, onClose }: { project: Project | 
       <Typography.Paragraph type="secondary">
         Expand a row to inspect columns. The selection drives the connector's table include list.
       </Typography.Paragraph>
+      {allTables.length > 0 && (
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Typography.Text type="secondary">Quick select ({allTables.length} tables):</Typography.Text>
+          <Button size="small" onClick={() => setSelected(allKeys)}>All ({allKeys.length})</Button>
+          {isSqlServerSource && (
+            <>
+              <Button size="small" onClick={() => setSelected(cdcKeys)}>CDC-enabled ({cdcKeys.length})</Button>
+              <Button size="small" onClick={() => setSelected(nonCdcKeys)}>Non-CDC ({nonCdcKeys.length})</Button>
+            </>
+          )}
+          <Button size="small" disabled={selected.length === 0} onClick={() => setSelected([])}>Clear</Button>
+        </Space>
+      )}
       <Table<TableInfo>
         rowKey={keyOf}
         loading={tables.isLoading}
         dataSource={tables.data}
         columns={columns}
-        pagination={{ pageSize: 20 }}
+        pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100', '300'] }}
         rowSelection={{
           selectedRowKeys: selected,
           onChange: (keys) => setSelected(keys as string[]),
+          preserveSelectedRowKeys: true,
         }}
         expandable={{
           expandedRowRender: (t) => connId
