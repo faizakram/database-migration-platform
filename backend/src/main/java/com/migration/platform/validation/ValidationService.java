@@ -263,38 +263,49 @@ public class ValidationService {
                     : scalar(tc, "SELECT COUNT(*) FROM " + tgtTable + softFilter);
 
             long extra = Math.max(0, targetRows - sourceRows);
-            String pk = primaryKey(sc, schema, table);
+            List<String> pks = primaryKeys(sc, schema, table);   // all PK columns, in key order (#180)
 
             long nullPk = 0, dupKeys = 0, missing = 0;
-            if (pk != null) {
-                String tgtPk = qid(tgtEngine, TargetNaming.apply(pk, mc.namingStrategy()));
-                nullPk = scalar(tc, "SELECT COUNT(*) FROM " + tgtTable + " WHERE " + tgtPk + " IS NULL");
-                dupKeys = scalar(tc, "SELECT COALESCE(SUM(c-1),0) FROM (SELECT " + tgtPk
-                        + " AS k, COUNT(*) c FROM " + tgtTable + " GROUP BY " + tgtPk + " HAVING COUNT(*)>1) d");
+            if (!pks.isEmpty()) {
+                // Resolve the PK column(s) on each side and build a normalized (composite) key
+                // expression — single- and multi-column PKs are handled uniformly (#180).
+                List<String> tgtCols = pks.stream()
+                        .map(c -> qid(tgtEngine, TargetNaming.apply(c, mc.namingStrategy()))).toList();
+                List<String> srcCols = pks.stream().map(c -> pkRef(srcEngine, c)).toList();
+                String tgtKeyExpr = keyExpr(tgtEngine, tgtCols);
+                String srcKeyExpr = keyExpr(srcEngine, srcCols);
+                String tgtColList = String.join(", ", tgtCols);
 
+                // A null in ANY PK column is invalid; duplicates are counted over the full key tuple.
+                String nullCond = tgtCols.stream().map(c -> c + " IS NULL").collect(java.util.stream.Collectors.joining(" OR "));
+                nullPk = scalar(tc, "SELECT COUNT(*) FROM " + tgtTable + " WHERE " + nullCond);
+                dupKeys = scalar(tc, "SELECT COALESCE(SUM(c-1),0) FROM (SELECT COUNT(*) c FROM " + tgtTable
+                        + " GROUP BY " + tgtColList + " HAVING COUNT(*)>1) d");
+
+                String srcTable = sourceQualify(srcEngine, schema, table);
                 // Key-level discrepancies in BOTH directions (#166):
                 //  - missing: sampled source keys absent on the target (insert lag, or real loss).
                 //  - extra:   sampled target keys absent on the source (delete lag, or real phantom).
                 // Under live load both are dominated by in-flight CDC lag. Re-check the exact keys over
                 // a few settle windows: lag drains (→ SYNCING); only genuinely missing/phantom keys
                 // persist to the end (→ FAIL). Skip the wait when there are no key discrepancies.
-                Set<String> missingKeys = missingSampleKeys(sc, tc, srcEngine, tgtEngine, schema, table, pk, tgtTable, tgtPk);
+                Set<String> missingKeys = sampleAbsent(sc, srcEngine, srcTable, srcKeyExpr, tc, tgtEngine, tgtTable, tgtKeyExpr);
                 // Extra (target-only) is a HARD-delete concern: under SOFT delete the target keeps
                 // deleted rows on purpose, so they're legitimately target-only — keep the count-based
                 // (soft-filtered) extra there instead of flagging those keys.
                 Set<String> extraKeys = softDelete
                         ? new LinkedHashSet<>()
-                        : extraSampleKeys(sc, tc, srcEngine, tgtEngine, schema, table, pk, tgtTable, tgtPk);
+                        : sampleAbsent(tc, tgtEngine, tgtTable, tgtKeyExpr, sc, srcEngine, srcTable, srcKeyExpr);
                 boolean clean = nullPk == 0 && dupKeys == 0;
                 if (clean && props.recheckSettleMs() > 0 && (!missingKeys.isEmpty() || !extraKeys.isEmpty())) {
                     for (int attempt = 0; attempt < MISSING_RECHECKS && (!missingKeys.isEmpty() || !extraKeys.isEmpty()); attempt++) {
                         try { Thread.sleep(props.recheckSettleMs()); }
                         catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
                         // missing resolves when the key appears on the target.
-                        if (!missingKeys.isEmpty()) missingKeys = absentIn(tc, tgtEngine, tgtTable, tgtPk, missingKeys);
+                        if (!missingKeys.isEmpty()) missingKeys = absentIn(tc, tgtEngine, tgtTable, tgtKeyExpr, missingKeys);
                         // extra resolves when the key leaves the target (the source delete propagated):
                         // keep only those still present on the target.
-                        if (!extraKeys.isEmpty()) extraKeys.removeAll(absentIn(tc, tgtEngine, tgtTable, tgtPk, extraKeys));
+                        if (!extraKeys.isEmpty()) extraKeys.removeAll(absentIn(tc, tgtEngine, tgtTable, tgtKeyExpr, extraKeys));
                     }
                 }
                 missing = missingKeys.size();
@@ -357,33 +368,25 @@ public class ValidationService {
         }
     }
 
-    /** Sampled source PKs that are absent on the target — the "missing" candidates. */
-    private Set<String> missingSampleKeys(Connection sc, Connection tc, DbType srcEngine, DbType tgtEngine,
-                                          String schema, String table, String pk, String tgtTable, String tgtPk) {
+    /**
+     * Sample keys from one side and return those absent on the other (best-effort). Used both ways:
+     * source→target gives the "missing" candidates, target→source gives the "extra" candidates (#166).
+     */
+    private Set<String> sampleAbsent(Connection fromConn, DbType fromEngine, String fromTable, String fromKeyExpr,
+                                     Connection inConn, DbType inEngine, String inTable, String inKeyExpr) {
         try {
-            Set<String> keys = sampleKeys(sc, srcEngine, sourceQualify(srcEngine, schema, table), pkRef(srcEngine, pk));
-            return absentIn(tc, tgtEngine, tgtTable, tgtPk, keys);
+            Set<String> keys = sampleKeys(fromConn, fromEngine, fromTable, fromKeyExpr);
+            return absentIn(inConn, inEngine, inTable, inKeyExpr, keys);
         } catch (Exception e) {
             return new LinkedHashSet<>();   // best-effort; non-fatal
         }
     }
 
-    /** Sampled target PKs that are absent on the source — the "extra" (target-only) candidates. */
-    private Set<String> extraSampleKeys(Connection sc, Connection tc, DbType srcEngine, DbType tgtEngine,
-                                        String schema, String table, String pk, String tgtTable, String tgtPk) {
-        try {
-            Set<String> keys = sampleKeys(tc, tgtEngine, tgtTable, tgtPk);
-            return absentIn(sc, srcEngine, sourceQualify(srcEngine, schema, table), pkRef(srcEngine, pk), keys);
-        } catch (Exception e) {
-            return new LinkedHashSet<>();   // best-effort; non-fatal
-        }
-    }
-
-    /** Sample up to {@code missingSampleSize} distinct PK values from a table on the given engine. */
-    private Set<String> sampleKeys(Connection c, DbType engine, String qualifiedTable, String pkRef) throws Exception {
+    /** Sample up to {@code missingSampleSize} distinct (composite) key values via the given key expression. */
+    private Set<String> sampleKeys(Connection c, DbType engine, String qualifiedTable, String keyExpr) throws Exception {
         int n = props.missingSampleSize();
         boolean top = engine == DbType.SQLSERVER || engine == DbType.ORACLE;
-        String q = "SELECT " + (top ? "TOP (" + n + ") " : "") + pkRef + " FROM " + qualifiedTable
+        String q = "SELECT " + (top ? "TOP (" + n + ") " : "") + keyExpr + " FROM " + qualifiedTable
                 + (top ? "" : " LIMIT " + n);
         Set<String> keys = new LinkedHashSet<>();
         try (Statement st = c.createStatement()) {
@@ -397,18 +400,18 @@ public class ValidationService {
 
     /**
      * Of {@code keys}, which are absent in {@code table} on {@code conn} — checked set-based via chunked
-     * {@code IN (...)} queries with engine-aware {@code lower(cast(pk AS text))} normalization on both
-     * sides. Works in either direction (source→target for missing, target→source for extra).
+     * {@code IN (...)} queries. {@code keyExpr} is the already-normalized (lower/cast, composite-joined)
+     * key expression for this engine, so both sides compare identically. Works in either direction
+     * (source→target for missing, target→source for extra).
      */
-    private Set<String> absentIn(Connection conn, DbType engine, String table, String quotedPk, Set<String> keys) throws Exception {
+    private Set<String> absentIn(Connection conn, DbType engine, String table, String keyExpr, Set<String> keys) throws Exception {
         if (keys.isEmpty()) return new LinkedHashSet<>();
-        String castExpr = textCast(engine, quotedPk);
         Set<String> present = new HashSet<>();
         List<String> all = new ArrayList<>(keys);
         for (int from = 0; from < all.size(); from += KEY_CHUNK) {
             List<String> chunk = all.subList(from, Math.min(from + KEY_CHUNK, all.size()));
             String placeholders = String.join(",", java.util.Collections.nCopies(chunk.size(), "lower(?)"));
-            String sql = "SELECT " + castExpr + " FROM " + table + " WHERE " + castExpr + " IN (" + placeholders + ")";
+            String sql = "SELECT " + keyExpr + " FROM " + table + " WHERE " + keyExpr + " IN (" + placeholders + ")";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 applyTimeout(ps);
                 for (int i = 0; i < chunk.size(); i++) ps.setString(i + 1, chunk.get(i));
@@ -431,6 +434,21 @@ public class ValidationService {
             default -> "text";   // PostgreSQL
         };
         return "lower(cast(" + col + " AS " + type + "))";
+    }
+
+    /**
+     * Normalized key expression for one or more (quoted) PK columns (#180). A single column is just its
+     * text-cast; a composite key concatenates each column's text-cast with a separator so the whole key
+     * compares as one value. Engine-aware concat: {@code ||} for Oracle/Db2, multi-arg {@code CONCAT}
+     * elsewhere (SQL Server / MySQL / PostgreSQL).
+     */
+    static String keyExpr(DbType engine, List<String> quotedCols) {
+        if (quotedCols.size() == 1) return textCast(engine, quotedCols.get(0));
+        List<String> parts = quotedCols.stream().map(c -> textCast(engine, c)).toList();
+        return switch (engine) {
+            case ORACLE, DB2 -> String.join(" || '~|~' || ", parts);
+            default -> "CONCAT(" + String.join(", '~|~', ", parts) + ")";   // SQL Server, MySQL, PostgreSQL
+        };
     }
 
     /**
@@ -517,13 +535,15 @@ public class ValidationService {
         if (props.queryTimeoutSeconds() > 0) st.setQueryTimeout(props.queryTimeoutSeconds());
     }
 
-    /** First primary-key column of the source table (null if none / composite handled as none here). */
-    private String primaryKey(Connection sc, String schema, String table) {
+    /** All primary-key columns of the source table, in key order (empty if the table has no PK) (#180). */
+    private List<String> primaryKeys(Connection sc, String schema, String table) {
+        java.util.TreeMap<Short, String> ordered = new java.util.TreeMap<>();
         try (ResultSet rs = sc.getMetaData().getPrimaryKeys(sc.getCatalog(), schema, table)) {
-            return rs.next() ? rs.getString("COLUMN_NAME") : null;
+            while (rs.next()) ordered.put(rs.getShort("KEY_SEQ"), rs.getString("COLUMN_NAME"));
         } catch (Exception e) {
-            return null;
+            return List.of();
         }
+        return new ArrayList<>(ordered.values());
     }
 
     @SuppressWarnings("unchecked")
