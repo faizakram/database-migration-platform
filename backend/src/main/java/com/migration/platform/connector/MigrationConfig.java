@@ -26,7 +26,7 @@ public record MigrationConfig(
         cfg = cfg == null ? Map.of() : cfg;
         return new MigrationConfig(
                 str(cfg, "topicPrefix", sanitize(projectName)),
-                str(cfg, "tableIncludeList", "dbo.*"),
+                tableIncludeList(cfg),
                 str(cfg, "snapshotMode", "initial"),
                 DeleteStrategy.valueOf(str(cfg, "deleteStrategy", "SOFT").toUpperCase()),
                 str(cfg, "targetSchema", "public"),
@@ -44,6 +44,18 @@ public record MigrationConfig(
     private static String str(Map<String, Object> m, String k, String def) {
         Object v = m.get(k);
         return (v == null || v.toString().isBlank()) ? def : v.toString();
+    }
+
+    /**
+     * Debezium source {@code table.include.list}. Prefer an explicit {@code tableIncludeList}; otherwise
+     * derive it from the project's {@code selectedTables} so the source captures exactly the chosen tables
+     * instead of the whole schema. Falls back to {@code dbo.*} only when neither is set.
+     */
+    private static String tableIncludeList(Map<String, Object> cfg) {
+        String explicit = str(cfg, "tableIncludeList", null);
+        if (explicit != null) return explicit;
+        List<String> selected = strList(cfg, "selectedTables");
+        return selected.isEmpty() ? "dbo.*" : String.join(",", selected);
     }
 
     @SuppressWarnings("unchecked")

@@ -36,6 +36,27 @@ class MigrationConfigTest {
     }
 
     @Test
+    void tableIncludeListDerivesFromSelectedTablesWhenNotExplicit() {
+        // No explicit tableIncludeList → capture exactly the selected tables, not the whole schema.
+        MigrationConfig mc = MigrationConfig.from(Map.of(
+                "selectedTables", List.of("dbo.Addresses", "dbo.Orders")), "p");
+        assertThat(mc.tableIncludeList()).isEqualTo("dbo.Addresses,dbo.Orders");
+    }
+
+    @Test
+    void explicitTableIncludeListWinsOverSelectedTables() {
+        MigrationConfig mc = MigrationConfig.from(Map.of(
+                "tableIncludeList", "dbo.Custom",
+                "selectedTables", List.of("dbo.Addresses", "dbo.Orders")), "p");
+        assertThat(mc.tableIncludeList()).isEqualTo("dbo.Custom");
+    }
+
+    @Test
+    void tableIncludeListFallsBackToSchemaWildcardWhenNothingSelected() {
+        assertThat(MigrationConfig.from(Map.of(), "p").tableIncludeList()).isEqualTo("dbo.*");
+    }
+
+    @Test
     void sanitizeProducesConnectorSafeNames() {
         assertThat(MigrationConfig.sanitize("Employees → PG (prod)!")).isEqualTo("employees-pg-prod");
         assertThat(MigrationConfig.sanitize("   ")).isEqualTo("project");
