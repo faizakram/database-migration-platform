@@ -86,7 +86,15 @@ public class BulkCopyService {
 
     public record BulkCopyRequest(
             UUID jobId, UUID projectId, UUID sourceConnectionId, UUID targetConnectionId,
-            String targetSchema, NamingStrategy naming, List<String> tables, int fetchSize) {}
+            String targetSchema, NamingStrategy naming, List<String> tables, int fetchSize,
+            boolean manageJobStatus) {
+
+        /** Full-load copy that owns the whole job lifecycle (the pure CDC-free fallback). */
+        public BulkCopyRequest(UUID jobId, UUID projectId, UUID sourceConnectionId, UUID targetConnectionId,
+                               String targetSchema, NamingStrategy naming, List<String> tables, int fetchSize) {
+            this(jobId, projectId, sourceConnectionId, targetConnectionId, targetSchema, naming, tables, fetchSize, true);
+        }
+    }
 
     /** Kick off the full load on a background thread; returns immediately. */
     public void startAsync(BulkCopyRequest req) {
@@ -97,7 +105,9 @@ public class BulkCopyService {
                 log.info("Bulk copy for job {} cancelled (job stopped)", req.jobId());
             } catch (Exception e) {
                 log.warn("Bulk copy for job {} failed: {}", req.jobId(), e.getMessage(), e);
-                failJob(req.jobId(), e.getMessage());
+                // In hybrid mode the CDC connectors own the job lifecycle — don't fail the whole job
+                // because the non-CDC bulk subset hit a snag; per-table FAILED status still records it.
+                if (req.manageJobStatus()) failJob(req.jobId(), e.getMessage());
             }
         });
     }
@@ -115,14 +125,17 @@ public class BulkCopyService {
                     "MongoDB source requires the CDC/change-streams path; CDC-free bulk copy is not supported for MongoDB.");
         }
 
-        setJob(req.jobId(), JobStatus.RUNNING, "full-load", null, false);
-        log.info("Bulk copy job {}: {} table(s) {} → {}", req.jobId(), req.tables().size(), srcType, tgtType);
+        if (req.manageJobStatus()) setJob(req.jobId(), JobStatus.RUNNING, "full-load", null, false);
+        log.info("Bulk copy job {}: {} table(s) {} → {}{}", req.jobId(), req.tables().size(), srcType, tgtType,
+                req.manageJobStatus() ? "" : " (hybrid: non-CDC subset; CDC owns job status)");
 
         // Create the target schema if it doesn't exist (the Debezium JDBC sink does this on the CDC
         // path; the bulk path must do it too before CREATE TABLE).
         targetSchema.ensure(tgt, req.targetSchema());
 
         long totalRows = 0;
+        int done = 0, skipped = 0;
+        List<String> failures = new java.util.ArrayList<>();   // table-level fault isolation (#217)
         try (Connection sc = jdbc.open(src, crypto.decrypt(src.getPasswordEnc()));
              Connection tc = jdbc.open(tgt, crypto.decrypt(tgt.getPasswordEnc()))) {
             tc.setAutoCommit(false);
@@ -131,11 +144,73 @@ public class BulkCopyService {
                 String[] parts = fq.split("\\.", 2);
                 String schemaName = parts.length == 2 ? parts[0] : defaultSchema(srcType, src.getUsername());
                 String tableName = parts.length == 2 ? parts[1] : parts[0];
-                totalRows += copyTable(req, sc, tc, srcType, tgtType, schemaName, tableName);
+
+                // Table-level resume (#217): a table already COMPLETED in a prior run keeps its target
+                // data — skip it so a restart re-copies only the pending/failed tables, not everything.
+                if (isCompleted(req.jobId(), tableName)) {
+                    skipped++;
+                    log.info("Bulk copy job {}: {}.{} already completed — skipping (resume)", req.jobId(), schemaName, tableName);
+                    continue;
+                }
+
+                // Per-table fault isolation (#217): one table's failure must not abort the whole job
+                // (DMS isolates per-table). Mark it FAILED, then carry on with the remaining tables.
+                try {
+                    totalRows += copyTable(req, sc, tc, srcType, tgtType, schemaName, tableName);
+                    done++;
+                } catch (Cancelled c) {
+                    throw c;   // a stop is job-wide, not a table failure
+                } catch (Exception e) {
+                    String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    failures.add(schemaName + "." + tableName + ": " + msg);
+                    markTable(req.jobId(), schemaName, tableName, "FAILED", 0, msg);
+                    log.warn("Bulk copy job {}: {}.{} failed — continuing with remaining tables: {}",
+                            req.jobId(), schemaName, tableName, msg);
+                    // A partial copy may have committed rows + left the target half-populated; the table is
+                    // FAILED, so a restart drops + recreates it (copyTable is idempotent). Roll back any
+                    // open batch on the shared target connection so the next table starts clean.
+                    try { tc.rollback(); } catch (SQLException ignore) { /* connection may be unusable */ }
+                }
             }
         }
-        setJob(req.jobId(), JobStatus.COMPLETED, "full-load", null, true);
-        log.info("Bulk copy job {} completed: {} row(s) across {} table(s)", req.jobId(), totalRows, req.tables().size());
+
+        if (failures.isEmpty()) {
+            if (req.manageJobStatus()) setJob(req.jobId(), JobStatus.COMPLETED, "full-load", null, true);
+            log.info("Bulk copy job {} {}: {} row(s) across {} table(s) ({} resumed/skipped)",
+                    req.jobId(), req.manageJobStatus() ? "completed" : "subset done", totalRows, done, skipped);
+        } else {
+            // Some tables succeeded, some failed: surface a per-table summary and mark the job FAILED so the
+            // failure is visible. Completed tables keep their data + COMPLETED status, so restarting the job
+            // re-copies only the failed/pending tables (#217). In hybrid mode the CDC connectors own the job
+            // lifecycle, so leave the job status alone — the per-table FAILED rows already record the failures.
+            if (req.manageJobStatus()) {
+                setJob(req.jobId(), JobStatus.FAILED, "full-load", failureSummary(done + skipped, failures), true);
+            }
+            log.warn("Bulk copy job {}: {} table(s) ok, {} failed — {}",
+                    req.jobId(), done + skipped, failures.size(), failureSummary(done + skipped, failures));
+        }
+    }
+
+    /** A table is resumable-skippable only once a prior run marked it fully COMPLETED. */
+    private boolean isCompleted(UUID jobId, String tableName) {
+        return tableStatus.findByJobIdAndTableNameIgnoreCase(jobId, tableName)
+                .map(t -> "COMPLETED".equals(t.getStatus()))
+                .orElse(false);
+    }
+
+    /** Compact job-level error for a partially-failed run: "{ok}/{total} tables ok; {n} failed: …". */
+    static String failureSummary(int ok, List<String> failures) {
+        int total = ok + failures.size();
+        StringBuilder sb = new StringBuilder()
+                .append(ok).append('/').append(total).append(" tables ok; ")
+                .append(failures.size()).append(" failed: ");
+        int show = Math.min(failures.size(), 5);
+        for (int i = 0; i < show; i++) {
+            if (i > 0) sb.append("; ");
+            sb.append(failures.get(i));
+        }
+        if (failures.size() > show) sb.append("; …(+").append(failures.size() - show).append(" more)");
+        return sb.toString();
     }
 
     private long copyTable(BulkCopyRequest req, Connection sc, Connection tc, DbType srcType, DbType tgtType,

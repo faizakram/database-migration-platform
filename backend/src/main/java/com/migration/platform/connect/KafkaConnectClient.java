@@ -3,6 +3,7 @@ package com.migration.platform.connect;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpServerErrorException;
@@ -108,11 +109,17 @@ public class KafkaConnectClient {
      * this is what powers "Re-run full load" (#131).
      */
     public void deleteOffsets(String name) {
-        withRetry(() -> client.delete().uri("/connectors/{name}/offsets", name).retrieve().toBodilessEntity());
+        // Explicit JSON content type: SimpleClientHttpRequestFactory otherwise tags even a bodiless
+        // request as application/x-www-form-urlencoded, which Connect rejects with HTTP 415 (same quirk
+        // as the bodiless POSTs in restart(), #202) — so the delete silently failed and stop/restart left
+        // the connector running (caused 409 "already exists" on the next start, #217).
+        withRetry(() -> client.delete().uri("/connectors/{name}/offsets", name)
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE).retrieve().toBodilessEntity());
     }
 
     public void delete(String name) {
-        withRetry(() -> client.delete().uri("/connectors/{name}", name).retrieve().toBodilessEntity());
+        withRetry(() -> client.delete().uri("/connectors/{name}", name)
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE).retrieve().toBodilessEntity());
     }
 
     /**

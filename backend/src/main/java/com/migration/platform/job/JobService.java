@@ -112,20 +112,31 @@ public class JobService {
             DbConnection src = requireConnection(project.getSourceConnectionId(), "source");
             DbConnection tgt = requireConnection(project.getTargetConnectionId(), "target");
 
-            // The Debezium source connector refuses to start — even for the full-load snapshot — unless
-            // the source is CDC-ready (database-level CDC AND a capture instance per selected table).
-            // Rather than block, auto-fall back to a one-time CDC-free full load (bulk copy) so a
-            // migration still completes when CDC can't be enabled on the source (#191).
+            // Per-table mode selection (#217 hybrid). The Debezium source can only capture tables that
+            // have a CDC capture instance; the rest can't stream. Rather than force the whole job into one
+            // mode, partition the selection: stream the CDC-capable tables via Debezium and bulk-copy the
+            // non-CDC ones in parallel, so a mixed project (e.g. 150 CDC + 150 non-CDC) snapshots everything
+            // and keeps the CDC subset live (#191 was all-or-nothing; this is per-table).
             List<String> tables = selectedTables(project);
-            boolean cdcReady = cdcReadiness.check(project.getSourceConnectionId()).ready()
-                    && cdcReadiness.tablesMissingCdc(project.getSourceConnectionId(), tables).isEmpty();
-            if (!cdcReady) {
-                log.info("Job {}: source not CDC-ready — running a CDC-free full load (bulk copy)", id);
+            boolean dbCdcReady = cdcReadiness.check(project.getSourceConnectionId()).ready();
+            List<String> missingCdc = dbCdcReady
+                    ? cdcReadiness.tablesMissingCdc(project.getSourceConnectionId(), tables)
+                    : List.copyOf(tables);   // database-level CDC off → no table can stream
+            java.util.Set<String> missingSet = new java.util.LinkedHashSet<>(missingCdc);
+            List<String> cdcTables = tables.stream().filter(t -> !missingSet.contains(t)).toList();
+
+            if (cdcTables.isEmpty()) {
+                // Nothing can stream → one-time CDC-free full load (bulk copy) for the whole selection.
+                log.info("Job {}: no CDC-capable tables — running a CDC-free full load (bulk copy)", id);
                 return startBulkFullLoad(job, project, tables);
             }
+            boolean hybrid = !missingSet.isEmpty();   // some stream, some bulk
 
             Map<String, Object> source = configService.sourceConnector(project, src, crypto.decrypt(src.getPasswordEnc()));
             Map<String, Object> sink = configService.sinkConnector(project, tgt, crypto.decrypt(tgt.getPasswordEnc()), src.getDbType());
+            // Hybrid: restrict the source capture to exactly the CDC-capable tables so Debezium doesn't try
+            // (and noisily skip) the non-CDC ones — those are handled by the bulk copy kicked off below.
+            if (hybrid) scopeSourceTables(source, cdcTables);
 
             // The JDBC sink creates target tables but not the schema — ensure it exists first so the
             // sink doesn't fail silently when the configured target schema is missing (#).
@@ -144,15 +155,24 @@ public class JobService {
             job.setSourceConnectorName(configService.sourceName(project));
             job.setSinkConnectorName(configService.sinkName(project));
             job.setStatus(JobStatus.SNAPSHOT);
-            job.setPhase("snapshot");
+            job.setPhase(hybrid ? "hybrid" : "snapshot");
             job.setStartedAt(OffsetDateTime.now());
             job.setError(null);
 
             project.setStatus(ProjectStatus.ACTIVE);
             projects.save(project);
-            audit.record("JOB_START", job.getProjectId().toString(), java.util.Map.of("jobId", id.toString()));
+            audit.record("JOB_START", job.getProjectId().toString(),
+                    java.util.Map.of("jobId", id.toString(), "mode", hybrid ? "hybrid" : "cdc"));
 
             seedTableStatus(job, project);
+
+            // Hybrid: bulk-copy the non-CDC tables in the background while Debezium streams the rest. The
+            // bulk copy does not own job status — the CDC connectors drive the job lifecycle (#217).
+            if (hybrid) {
+                log.info("Job {}: hybrid — CDC streaming {} table(s), bulk-copy {} non-CDC table(s)",
+                        id, cdcTables.size(), missingSet.size());
+                startBulkSubset(job, project, List.copyOf(missingSet));
+            }
         } catch (IllegalArgumentException e) {
             throw e; // surfaced as 400 (e.g. missing connections)
         } catch (Exception e) {
@@ -337,6 +357,44 @@ public class JobService {
         }
     }
 
+    /**
+     * Seed per-table status for a (re)started bulk full load, preserving tables already COMPLETED so the
+     * copy resumes at table granularity instead of replaying every table (#217). Tables that previously
+     * failed or never finished are reset to PENDING; status rows for tables no longer selected are dropped.
+     */
+    private void seedTableStatusResumable(MigrationJob job, List<String> tables) {
+        java.util.Map<String, TableStatus> existing = new java.util.HashMap<>();
+        for (TableStatus ts : tableStatus.findByJobIdOrderByTableName(job.getId())) {
+            existing.put(ts.getTableName().toLowerCase(), ts);
+        }
+        java.util.Set<String> selected = new java.util.HashSet<>();
+        for (String fq : tables) {
+            String[] parts = fq.split("\\.", 2);
+            String schemaName = parts.length == 2 ? parts[0] : "dbo";
+            String tableName = parts.length == 2 ? parts[1] : parts[0];
+            selected.add(tableName.toLowerCase());
+            TableStatus ts = existing.get(tableName.toLowerCase());
+            if (ts != null && "COMPLETED".equals(ts.getStatus())) {
+                continue;   // already done — leave it so the bulk copy skips it on resume
+            }
+            if (ts == null) {
+                ts = new TableStatus();
+                ts.setJobId(job.getId());
+                ts.setSchemaName(schemaName);
+                ts.setTableName(tableName);
+            }
+            ts.setPhase("DATA");
+            ts.setStatus("PENDING");
+            ts.setRowsSynced(0);
+            ts.setError(null);
+            tableStatus.save(ts);
+        }
+        // Drop status rows for tables no longer in the selection so /tables reflects the current set.
+        for (TableStatus ts : existing.values()) {
+            if (!selected.contains(ts.getTableName().toLowerCase())) tableStatus.delete(ts);
+        }
+    }
+
     private void forEachConnector(MigrationJob job, java.util.function.Consumer<String> op) {
         if (job.getSourceConnectorName() != null) op.accept(job.getSourceConnectorName());
         if (job.getSinkConnectorName() != null) op.accept(job.getSinkConnectorName());
@@ -371,7 +429,7 @@ public class JobService {
         job.setError(null);
         project.setStatus(ProjectStatus.ACTIVE);
         projects.save(project);
-        seedTableStatus(job, project);
+        seedTableStatusResumable(job, tables);
         MigrationJob saved = repo.save(job);
         audit.record("JOB_START", job.getProjectId().toString(),
                 java.util.Map.of("jobId", saved.getId().toString(), "mode", "full-load"));
@@ -390,6 +448,41 @@ public class JobService {
             bulkCopy.startAsync(req);
         }
         return JobResponse.from(saved);
+    }
+
+    /**
+     * Restrict a source connector's capture set to an explicit table list — hybrid mode (#217) streams
+     * only the CDC-capable tables and leaves the non-CDC ones to the bulk copy.
+     */
+    @SuppressWarnings("unchecked")
+    private void scopeSourceTables(Map<String, Object> sourceConnector, List<String> tables) {
+        Object cfg = sourceConnector.get("config");
+        if (!(cfg instanceof Map)) return;
+        Map<String, Object> c = (Map<String, Object>) cfg;
+        String joined = String.join(",", tables);
+        // SQL Server / MySQL / Postgres / Oracle / Db2 use table.include.list; MongoDB uses collections.
+        if (c.containsKey("table.include.list")) c.put("table.include.list", joined);
+        if (c.containsKey("collection.include.list")) c.put("collection.include.list", joined);
+    }
+
+    /**
+     * Bulk-copy a subset of tables in the background without owning job status (#217 hybrid): Debezium
+     * streams the CDC-capable tables and drives the job lifecycle, while this one-time copy handles the
+     * non-CDC tables. Kicked off after commit so the worker reads the persisted SNAPSHOT job.
+     */
+    private void startBulkSubset(MigrationJob job, MigrationProject project, List<String> subset) {
+        var mc = com.migration.platform.connector.MigrationConfig.from(project.getConfig(), project.getName());
+        var req = new BulkCopyService.BulkCopyRequest(
+                job.getId(), project.getId(), project.getSourceConnectionId(), project.getTargetConnectionId(),
+                mc.targetSchema(), mc.namingStrategy(), subset, mc.snapshotFetchSize(), false /* CDC owns job status */);
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override public void afterCommit() { bulkCopy.startAsync(req); }
+                    });
+        } else {
+            bulkCopy.startAsync(req);
+        }
     }
 
     private MigrationProject requireProject(UUID id) {

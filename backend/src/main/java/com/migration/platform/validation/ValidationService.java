@@ -282,8 +282,14 @@ public class ValidationService {
             // unquoted names get folded to lower case by PostgreSQL and miss a "OrderItems"-style table.
             String tgtTable = qid(tgtEngine, mc.targetSchema()) + "." + qid(tgtEngine, TargetNaming.apply(table, mc.namingStrategy()));
             // The soft-delete marker is renamed by the naming strategy too (e.g. snake_case -> cdc_deleted).
-            String deleteMarker = qid(tgtEngine, TargetNaming.apply("__cdc_deleted", mc.namingStrategy()));
-            String softFilter = softDelete ? " WHERE " + deleteMarker + " IS NOT TRUE" : "";
+            String markerName = TargetNaming.apply("__cdc_deleted", mc.namingStrategy());
+            // Hybrid jobs (#217) mix CDC-streamed tables (the Debezium sink adds __cdc_deleted) with
+            // bulk-copied non-CDC tables (no such column). Only soft-filter tables that actually have the
+            // marker — otherwise the COUNT errors with "column __cdc_deleted does not exist".
+            boolean tableSoft = softDelete
+                    && hasColumn(tc, mc.targetSchema(), TargetNaming.apply(table, mc.namingStrategy()), markerName);
+            String deleteMarker = qid(tgtEngine, markerName);
+            String softFilter = tableSoft ? " WHERE " + deleteMarker + " IS NOT TRUE" : "";
 
             // Row counts: approximate via catalog stats when enabled (fast on huge tables); exact
             // COUNT(*) otherwise. The target falls back to exact whenever a soft-delete filter applies,
@@ -326,7 +332,7 @@ public class ValidationService {
                 // Extra (target-only) is a HARD-delete concern: under SOFT delete the target keeps
                 // deleted rows on purpose, so they're legitimately target-only — keep the count-based
                 // (soft-filtered) extra there instead of flagging those keys.
-                Set<String> extraKeys = softDelete
+                Set<String> extraKeys = tableSoft
                         ? new LinkedHashSet<>()
                         : sampleAbsent(tc, tgtEngine, tgtTable, tgtKeyExpr, sc, srcEngine, srcTable, srcKeyExpr);
                 boolean clean = nullPk == 0 && dupKeys == 0;
@@ -344,7 +350,7 @@ public class ValidationService {
                 missing = missingKeys.size();
                 // For HARD delete, key-confirmed phantoms override the raw count diff so insert-lag
                 // can't mask, nor delete-lag inflate, the "extra" signal. SOFT keeps count-based extra.
-                if (!softDelete) extra = extraKeys.size();
+                if (!tableSoft) extra = extraKeys.size();
             }
             long[] ops = cdcOpCounts(sc, srcEngine, schema, table);
             return ValidationLogic.assess(schema, table, sourceRows, targetRows, nullPk, dupKeys, missing, extra,
@@ -352,6 +358,22 @@ public class ValidationService {
         } catch (Exception e) {
             return new TableValidation(schema, table, -1, -1, 0, 0, 0, 0, -1, -1, -1, "ERROR", List.of(e.getMessage()));
         }
+    }
+
+    /**
+     * Whether a target table has a given column, read from JDBC metadata (case-insensitive). Used to tell
+     * a CDC-sink table (has {@code __cdc_deleted}) from a bulk-copied one in a hybrid job (#217), without
+     * running a query that would error — and poison the connection — when the column is absent.
+     */
+    private boolean hasColumn(Connection tc, String schema, String table, String column) {
+        try (ResultSet rs = tc.getMetaData().getColumns(null, schema, table, null)) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("COLUMN_NAME"))) return true;
+            }
+        } catch (SQLException e) {
+            log.debug("Column probe failed for {}.{}.{}: {}", schema, table, column, e.getMessage());
+        }
+        return false;
     }
 
     /**
