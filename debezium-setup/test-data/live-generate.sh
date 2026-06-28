@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Start the continuous live data generator against the PascalShop source (manual CDC demo).
-# Inserts ~14 rows/second across all 10 tables so you can watch counts climb live.
+# Runs a mixed INSERT/UPDATE/DELETE workload each second across a random sample of the CDC-enabled
+# tables (T001..T150) so you can watch inserts/updates/deletes stream through CDC live.
 #
 #   ./live-generate.sh                 # generate into PascalShop (default)
 #   ./live-generate.sh TestShop        # generate into a different database
