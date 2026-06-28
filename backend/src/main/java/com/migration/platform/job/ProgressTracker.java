@@ -81,7 +81,14 @@ public class ProgressTracker {
 
         for (TableStatus ts : rows) {
             Long produced = lookup(recordsByTable, ts.getTableName());
-            if (produced != null) ts.setRowsSynced(produced);
+
+            // Only tables in the CDC stream (those with a Debezium topic) are tracked here. In a hybrid
+            // job (#217) the bulk-copied non-CDC tables have no topic and are owned by the bulk copy — so
+            // leave their status (COMPLETED / FAILED / mid-copy) untouched; otherwise this loop drags them
+            // to IN_PROGRESS/CDC (or FAILED on a source-task error). Pure-CDC tables all gain a topic once
+            // the snapshot starts producing, so they're unaffected.
+            if (produced == null) continue;
+            ts.setRowsSynced(produced);
 
             if (failure != null) {
                 ts.setStatus("FAILED");

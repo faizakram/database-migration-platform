@@ -86,7 +86,15 @@ public class BulkCopyService {
 
     public record BulkCopyRequest(
             UUID jobId, UUID projectId, UUID sourceConnectionId, UUID targetConnectionId,
-            String targetSchema, NamingStrategy naming, List<String> tables, int fetchSize) {}
+            String targetSchema, NamingStrategy naming, List<String> tables, int fetchSize,
+            boolean manageJobStatus) {
+
+        /** Full-load copy that owns the whole job lifecycle (the pure CDC-free fallback). */
+        public BulkCopyRequest(UUID jobId, UUID projectId, UUID sourceConnectionId, UUID targetConnectionId,
+                               String targetSchema, NamingStrategy naming, List<String> tables, int fetchSize) {
+            this(jobId, projectId, sourceConnectionId, targetConnectionId, targetSchema, naming, tables, fetchSize, true);
+        }
+    }
 
     /** Kick off the full load on a background thread; returns immediately. */
     public void startAsync(BulkCopyRequest req) {
@@ -97,7 +105,9 @@ public class BulkCopyService {
                 log.info("Bulk copy for job {} cancelled (job stopped)", req.jobId());
             } catch (Exception e) {
                 log.warn("Bulk copy for job {} failed: {}", req.jobId(), e.getMessage(), e);
-                failJob(req.jobId(), e.getMessage());
+                // In hybrid mode the CDC connectors own the job lifecycle — don't fail the whole job
+                // because the non-CDC bulk subset hit a snag; per-table FAILED status still records it.
+                if (req.manageJobStatus()) failJob(req.jobId(), e.getMessage());
             }
         });
     }
@@ -115,8 +125,9 @@ public class BulkCopyService {
                     "MongoDB source requires the CDC/change-streams path; CDC-free bulk copy is not supported for MongoDB.");
         }
 
-        setJob(req.jobId(), JobStatus.RUNNING, "full-load", null, false);
-        log.info("Bulk copy job {}: {} table(s) {} → {}", req.jobId(), req.tables().size(), srcType, tgtType);
+        if (req.manageJobStatus()) setJob(req.jobId(), JobStatus.RUNNING, "full-load", null, false);
+        log.info("Bulk copy job {}: {} table(s) {} → {}{}", req.jobId(), req.tables().size(), srcType, tgtType,
+                req.manageJobStatus() ? "" : " (hybrid: non-CDC subset; CDC owns job status)");
 
         // Create the target schema if it doesn't exist (the Debezium JDBC sink does this on the CDC
         // path; the bulk path must do it too before CREATE TABLE).
@@ -164,14 +175,17 @@ public class BulkCopyService {
         }
 
         if (failures.isEmpty()) {
-            setJob(req.jobId(), JobStatus.COMPLETED, "full-load", null, true);
-            log.info("Bulk copy job {} completed: {} row(s) across {} table(s) ({} resumed/skipped)",
-                    req.jobId(), totalRows, done, skipped);
+            if (req.manageJobStatus()) setJob(req.jobId(), JobStatus.COMPLETED, "full-load", null, true);
+            log.info("Bulk copy job {} {}: {} row(s) across {} table(s) ({} resumed/skipped)",
+                    req.jobId(), req.manageJobStatus() ? "completed" : "subset done", totalRows, done, skipped);
         } else {
             // Some tables succeeded, some failed: surface a per-table summary and mark the job FAILED so the
             // failure is visible. Completed tables keep their data + COMPLETED status, so restarting the job
-            // re-copies only the failed/pending tables (#217).
-            setJob(req.jobId(), JobStatus.FAILED, "full-load", failureSummary(done + skipped, failures), true);
+            // re-copies only the failed/pending tables (#217). In hybrid mode the CDC connectors own the job
+            // lifecycle, so leave the job status alone — the per-table FAILED rows already record the failures.
+            if (req.manageJobStatus()) {
+                setJob(req.jobId(), JobStatus.FAILED, "full-load", failureSummary(done + skipped, failures), true);
+            }
             log.warn("Bulk copy job {}: {} table(s) ok, {} failed — {}",
                     req.jobId(), done + skipped, failures.size(), failureSummary(done + skipped, failures));
         }
