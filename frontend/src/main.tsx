@@ -11,7 +11,16 @@ import 'antd/dist/reset.css';
 import './index.css';
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: false,
+      // Treat data as fresh for 10s so revisiting a page / remounting a drawer doesn't refetch
+      // immediately, and keep it cached for 10 min. Live views set their own refetchInterval. (#216)
+      staleTime: 10_000,
+      gcTime: 10 * 60_000,
+    },
+  },
 });
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

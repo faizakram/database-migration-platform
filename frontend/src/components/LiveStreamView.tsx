@@ -1,6 +1,6 @@
 import { Table, Tag, Statistic, Row, Col, Empty, Badge, Tooltip } from 'antd';
 import { ThunderboltOutlined } from '@ant-design/icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { tokenStore } from '../auth/token';
 import type { LiveSnapshot, LiveTableThroughput } from '../api/types';
 
@@ -37,9 +37,11 @@ export default function LiveStreamView({ streamPath, showProject }: { streamPath
   }, [streamPath]);
 
   const tables = snap?.tables ?? [];
-  const active = tables.filter((t) => t.eventsPerSec > 0).length;
+  // Derived values + columns are memoized so the per-second SSE tick doesn't rebuild them and
+  // force a full re-render of every row (#216).
+  const active = useMemo(() => tables.filter((t) => t.eventsPerSec > 0).length, [tables]);
 
-  const columns = [
+  const columns = useMemo(() => [
     ...(showProject ? [{ title: 'Project', dataIndex: 'project', render: (p: string | null) => p ?? '—' }] : []),
     { title: 'Table', dataIndex: 'table' },
     { title: 'Rate', dataIndex: 'eventsPerSec', render: rate,
@@ -51,7 +53,7 @@ export default function LiveStreamView({ streamPath, showProject }: { streamPath
     { title: 'Total', dataIndex: 'total', render: (v: number) => v.toLocaleString() },
     { title: <Tooltip title="now − source commit time of the latest event">Lag</Tooltip>,
       dataIndex: 'lastLagMs', render: lagTag },
-  ];
+  ], [showProject]);
 
   return (
     <>
@@ -72,7 +74,10 @@ export default function LiveStreamView({ streamPath, showProject }: { streamPath
         : (
           <Table<LiveTableThroughput>
             rowKey={(r) => `${r.projectId ?? ''}.${r.table}`}
-            size="small" dataSource={tables} pagination={false} scroll={{ x: 'max-content' }}
+            size="small" dataSource={tables} pagination={false}
+            // Virtualized + capped height: with 300 tables only the visible rows render, so the
+            // per-second stream update stays cheap (#216).
+            virtual scroll={{ x: 'max-content', y: 480 }}
             columns={columns}
           />
         )}

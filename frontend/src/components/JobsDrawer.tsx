@@ -22,7 +22,7 @@ function JobTables({ jobId, live }: { jobId: string; live: boolean }) {
     queryKey: ['job-tables', jobId],
     queryFn: () => jobsApi.tables(jobId),
     // Poll while the run is active so per-table rows/phase advance in view (#129).
-    refetchInterval: live ? 5000 : false,
+    refetchInterval: live ? 8000 : false,   // (#216)
   });
   if (!isLoading && (!data || data.length === 0)) {
     return <Typography.Text type="secondary">No per-table status (start the run to populate).</Typography.Text>;
@@ -68,7 +68,7 @@ export default function JobsDrawer({ project, onClose }: { project: Project | nu
     queryKey: ['jobs', project?.id],
     queryFn: () => jobsApi.listForProject(project!.id),
     enabled: open,
-    refetchInterval: open ? 4000 : false,
+    refetchInterval: open ? 8000 : false,   // (#216)
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['jobs', project?.id] });

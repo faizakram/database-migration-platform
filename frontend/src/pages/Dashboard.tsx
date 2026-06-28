@@ -41,12 +41,12 @@ export default function Dashboard() {
   const overview = useQuery({
     queryKey: ['monitoring-overview'],
     queryFn: monitoringApi.overview,
-    refetchInterval: 4000,
+    refetchInterval: 10000,   // dashboard health — 10s is plenty (#216)
   });
   const queue = useQuery({
     queryKey: ['orchestrator-status'],
     queryFn: orchestratorApi.status,
-    refetchInterval: 3000,
+    refetchInterval: 8000,   // job-queue status (#216)
   });
   const queueTasks: OrchestratorTask[] = [
     ...(queue.data?.runningTasks ?? []),

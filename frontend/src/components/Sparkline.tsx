@@ -1,10 +1,12 @@
-import { useId } from 'react';
+import { memo, useId } from 'react';
 
 /**
  * A tiny dependency-free SVG sparkline: smooth line, soft area fill, emphasized endpoint.
  * Renders nothing meaningful below 2 points (shows a flat baseline).
+ * Memoized (#216): the dashboard re-renders on every poll, but each sparkline only needs to
+ * repaint when its own data/props change.
  */
-export default function Sparkline({
+function Sparkline({
   data, color = '#4F46E5', width = 96, height = 32, strokeWidth = 1.75,
 }: {
   data: number[];
@@ -43,3 +45,5 @@ export default function Sparkline({
     </svg>
   );
 }
+
+export default memo(Sparkline);

@@ -54,7 +54,7 @@ export default function ValidationDrawer({ project, onClose }: { project: Projec
     queryKey: ['validation-run', project?.id, runId],
     queryFn: () => projectsApi.validationRun(project!.id, runId!),
     enabled: open && view === 'integrity' && !!runId,
-    refetchInterval: (q) => (RUNNING(q.state.data?.status) ? 1500 : false),
+    refetchInterval: (q) => (RUNNING(q.state.data?.status) ? 4000 : false),   // (#216)
   });
 
   const current: ValidationRun | null | undefined = runId ? integrityRun.data : integrityLatest.data;
@@ -237,7 +237,8 @@ export default function ValidationDrawer({ project, onClose }: { project: Projec
             loading={history.isLoading || run.isPending}
             dataSource={latest?.results}
             columns={columns}
-            pagination={false}
+            // Cap rendered rows — a 300-table reconciliation otherwise renders every row (#216).
+            pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['15', '50', '100'], hideOnSinglePage: true }}
           />}
 
       {history.data && history.data.length > 1 && (
