@@ -113,7 +113,7 @@ public class JobService {
             // full-load snapshot — when the source database isn't CDC-ready, returning a cryptic
             // Connect 400 ("database X is not enabled for Change Data Capture") that fails the whole
             // job. Surface the actionable readiness findings up front instead (#191).
-            assertSourceCdcReady(project.getSourceConnectionId());
+            assertSourceCdcReady(project.getSourceConnectionId(), selectedTables(project));
 
             Map<String, Object> source = configService.sourceConnector(project, src, crypto.decrypt(src.getPasswordEnc()));
             Map<String, Object> sink = configService.sinkConnector(project, tgt, crypto.decrypt(tgt.getPasswordEnc()), src.getDbType());
@@ -307,14 +307,30 @@ public class JobService {
      * Block job start when the source database isn't CDC-ready, with the readiness findings surfaced
      * as a 400 instead of letting the Debezium connector fail cryptically at deploy time (#191).
      */
-    private void assertSourceCdcReady(UUID sourceConnectionId) {
+    private void assertSourceCdcReady(UUID sourceConnectionId, List<String> selectedTables) {
         var readiness = cdcReadiness.check(sourceConnectionId);
-        if (readiness.ready()) return;
-        String issues = readiness.checks().stream()
-                .filter(c -> !c.ok())
-                .map(c -> c.name() + " — " + c.detail() + " Fix: " + c.remediation())
-                .collect(java.util.stream.Collectors.joining(" | "));
-        throw new IllegalArgumentException("Source database is not ready for CDC: " + issues);
+        if (!readiness.ready()) {
+            String issues = readiness.checks().stream()
+                    .filter(c -> !c.ok())
+                    .map(c -> c.name() + " — " + c.detail() + " Fix: " + c.remediation())
+                    .collect(java.util.stream.Collectors.joining(" | "));
+            throw new IllegalArgumentException("Source database is not ready for CDC: " + issues);
+        }
+        // Database-level CDC alone isn't enough on SQL Server: the connector derives its capture set
+        // from per-table CDC instances, so a selected table without table-level CDC is skipped
+        // entirely — not even the full load is delivered, and nothing is created on the target. Block
+        // with the offending tables rather than letting the job "succeed" while delivering nothing.
+        List<String> missing = cdcReadiness.tablesMissingCdc(sourceConnectionId, selectedTables);
+        if (!missing.isEmpty()) {
+            int shown = Math.min(missing.size(), 15);
+            String list = String.join(", ", missing.subList(0, shown))
+                    + (missing.size() > shown ? " … (" + missing.size() + " tables total)" : "");
+            throw new IllegalArgumentException(
+                    "These selected tables have no CDC capture instance, so the SQL Server connector will skip "
+                    + "them — not even the full load is delivered and nothing is created on the target: " + list
+                    + ". Enable table-level CDC for each, e.g. EXEC sys.sp_cdc_enable_table "
+                    + "@source_schema='dbo', @source_name='<table>', @role_name=NULL.");
+        }
     }
 
     private MigrationProject requireProject(UUID id) {

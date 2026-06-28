@@ -9,7 +9,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -61,6 +63,55 @@ public class CdcReadinessService {
         }
         boolean ready = checks.stream().allMatch(Check::ok);
         return new Readiness(c.getDbType(), style.name(), ready, checks);
+    }
+
+    /**
+     * SQL Server only: of {@code selectedTables}, which lack a CDC capture instance. The Debezium
+     * SQL Server connector derives its capture set from CDC capture instances and intersects that with
+     * table.include.list — a selected table without table-level CDC is invisible to the connector and
+     * is skipped entirely, even by the initial snapshot (full load). The connector still reports
+     * RUNNING and silently delivers nothing for it, so nothing is created on the target (#191).
+     *
+     * <p>Returns empty for other engines (their snapshot reads included tables directly, so per-table
+     * CDC isn't a precondition for the full load) and on any lookup failure (don't block on a transient
+     * error — the database-level check and the connector still guard the real cases). Entries are
+     * returned in the caller's original "schema.table" form.
+     */
+    public List<String> tablesMissingCdc(UUID connectionId, List<String> selectedTables) {
+        DbConnection c = repo.findById(connectionId)
+                .orElseThrow(() -> new NotFoundException("Connection " + connectionId + " not found"));
+        if (c.getDbType() != DbType.SQLSERVER || selectedTables == null || selectedTables.isEmpty()) {
+            return List.of();
+        }
+        Set<String> enabled;
+        try (Connection conn = jdbc.open(c, crypto.decrypt(c.getPasswordEnc()))) {
+            enabled = cdcEnabledTables(conn);
+        } catch (SQLException e) {
+            return List.of();
+        }
+        List<String> missing = new ArrayList<>();
+        for (String t : selectedTables) {
+            String key = (t.contains(".") ? t : "dbo." + t).toLowerCase();
+            if (!enabled.contains(key)) missing.add(t);
+        }
+        return missing;
+    }
+
+    /** SQL Server: "schema.table" (lowercased) for every table with a CDC capture instance. */
+    private Set<String> cdcEnabledTables(Connection conn) throws SQLException {
+        Set<String> set = new HashSet<>();
+        String sql = """
+                SELECT s.name AS schema_name, t.name AS table_name
+                FROM cdc.change_tables ct
+                JOIN sys.tables t ON ct.source_object_id = t.object_id
+                JOIN sys.schemas s ON t.schema_id = s.schema_id
+                """;
+        try (Statement st = conn.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            while (rs.next()) {
+                set.add((rs.getString("schema_name") + "." + rs.getString("table_name")).toLowerCase());
+            }
+        }
+        return set;
     }
 
     private void sqlServer(Connection conn, List<Check> checks) throws SQLException {
